@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aditya & Tishu</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --sky1:#1A1240; --sky2:#2B1B5E; --gold:#EFB854; --coral:#F27A6B;
+    --thread:#C9A6E8; --cream:#F5EFE6; --dim:#B3A9D6;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:inherit;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:radial-gradient(ellipse at top, var(--sky2), var(--sky1) 60%);
+    color:var(--cream); font-family:'Inter',sans-serif; min-height:100%; overflow-x:hidden;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:44px 22px 60px;}
+  h1{
+    font-family:'Fraunces',serif; font-weight:600; font-style:italic;
+    font-size:clamp(28px,6vw,42px); line-height:1.15; margin:0 0 10px;
+  }
+  .sub{color:var(--dim); font-size:15px; max-width:44ch; line-height:1.55; margin:0 0 34px;}
+
+  .thread{position:relative; display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+    background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:20px;
+    padding:30px 18px; margin-bottom:14px;}
+  .node{text-align:center; padding:0 12px;}
+  .node .city{font-family:'Fraunces',serif; font-size:18px; margin:0;}
+  .node .who{color:var(--coral); font-size:12.5px; margin:2px 0 16px;}
+  .node .t{font-family:'Fraunces',serif; font-weight:600; font-size:clamp(32px,7vw,44px); margin:0;}
+  .node .d{color:var(--dim); font-size:12px; margin:6px 0 0;}
+  .line{width:2px; height:70%; align-self:center; background:linear-gradient(var(--thread),var(--gold));
+    position:relative;}
+  .line::before, .line::after{content:'✦'; position:absolute; left:50%; transform:translateX(-50%); color:var(--gold); font-size:11px;}
+  .line::before{top:-8px;} .line::after{bottom:-8px;}
+  .gap{text-align:center; color:var(--dim); font-size:13px; margin:0 0 38px;}
+  .gap b{color:var(--gold); font-weight:600;}
+
+  h2.section{font-family:'Fraunces',serif; font-weight:400; font-size:19px; margin:0 0 14px; color:var(--cream);}
+
+  .chat{background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:18px; padding:20px 18px; margin-bottom:24px;}
+  .chat-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
+  .whoami{display:flex; gap:6px;}
+  .whoami button{background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:var(--dim); border-radius:100px; font-size:12px; padding:5px 12px; cursor:pointer;}
+  .whoami button.active{background:var(--gold); color:var(--sky1); border-color:var(--gold); font-weight:600;}
+  .msgs{display:flex; flex-direction:column; gap:8px; max-height:280px; overflow-y:auto; padding:4px 2px 8px;}
+  .msg{max-width:78%; padding:9px 13px; border-radius:14px; font-size:14px; line-height:1.4;}
+  .msg.me{align-self:flex-end; background:var(--coral); color:var(--sky1); border-bottom-right-radius:4px;}
+  .msg.them{align-self:flex-start; background:rgba(255,255,255,0.08); border-bottom-left-radius:4px;}
+  .msg .meta{display:block; font-size:10px; opacity:0.65; margin-top:3px;}
+  .empty{color:var(--dim); font-size:13px; text-align:center; padding:18px 0;}
+  .chat-in{display:flex; gap:8px; margin-top:10px;}
+  .chat-in input{flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:100px; color:var(--cream); font-size:14px; padding:11px 16px; font-family:'Inter',sans-serif;}
+  .chat-in button{background:var(--gold); color:var(--sky1); border:none; border-radius:100px; font-weight:600; padding:0 18px; cursor:pointer; font-size:14px;}
+  .note{color:var(--dim); font-size:11.5px; text-align:center; margin-top:8px;}
+
+  .special{background:linear-gradient(135deg, rgba(239,184,84,0.12), rgba(242,122,107,0.12)); border:1px solid rgba(239,184,84,0.25);
+    border-radius:18px; padding:26px 22px; text-align:center;}
+  .special p{color:var(--dim); font-size:14px; margin:0 0 16px;}
+  .connect-btn{display:inline-flex; align-items:center; gap:8px; background:var(--coral); color:var(--sky1); font-weight:600; font-size:15px;
+    padding:13px 24px; border-radius:100px; border:none; cursor:pointer; text-decoration:none;}
+  .connect-btn:focus-visible{outline:2px solid var(--gold); outline-offset:3px;}
+  footer{text-align:center; color:var(--dim); font-size:11.5px; margin-top:30px; opacity:0.7;}
+  .gate{min-height:100%; display:grid; place-items:center; padding:24px;}
+  .gate-inner{width:min(100%,420px); padding:30px 26px; border:1px solid rgba(255,255,255,.12); border-radius:18px; background:rgba(19,12,48,.72); box-shadow:0 24px 80px rgba(0,0,0,.24);}
+  .welcome-screen{position:fixed; inset:0; z-index:5; display:grid; place-items:center; overflow:hidden; padding:24px; background:rgba(10,7,25,.76); backdrop-filter:blur(7px);}
+  .welcome-card{position:relative; width:min(100%,460px); padding:48px 28px 34px; border:1px solid rgba(239,184,84,.3); border-radius:18px; background:radial-gradient(ellipse at top, #39275A, #211747 72%); box-shadow:0 26px 90px rgba(0,0,0,.48); text-align:center; animation:welcome-arrive .75s cubic-bezier(.18,.8,.25,1.15) both;}
+  .welcome-close{position:absolute; top:10px; right:12px; width:36px; height:36px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.14); border-radius:50%; background:rgba(255,255,255,.06); color:var(--cream); font:400 23px/1 'Inter',sans-serif; cursor:pointer;}
+  .welcome-close:hover{background:rgba(255,255,255,.12);}
+  .welcome-close:focus-visible,.welcome-enter:focus-visible{outline:2px solid var(--gold); outline-offset:3px;}
+  .welcome-kicker{color:var(--gold); font-size:11px; margin:0 0 18px;}
+  .welcome-title{font:600 40px/1.12 'Fraunces',serif; margin:0 auto 14px; max-width:12ch;}
+  .welcome-note{color:var(--dim); font-size:14px; line-height:1.6; margin:0 auto 26px; max-width:34ch;}
+  .welcome-enter{background:var(--gold); color:var(--sky1); border:0; border-radius:100px; padding:12px 19px; font:600 13px 'Inter',sans-serif; cursor:pointer;}
+  .welcome-spark{position:absolute; color:var(--gold); animation:spark-drift 2.3s ease-in-out infinite alternate;}
+  .welcome-spark.one{top:5%; left:12%; font-size:23px;}
+  .welcome-spark.two{top:20%; right:8%; color:var(--coral); font-size:17px; animation-delay:.4s;}
+  .welcome-spark.three{bottom:17%; left:8%; font-size:15px; animation-delay:.8s;}
+  .welcome-spark.four{right:12%; bottom:4%; color:var(--coral); font-size:22px; animation-delay:.2s;}
+  .welcome-screen.is-leaving .welcome-card{animation:welcome-depart .38s ease-in both;}
+  @keyframes welcome-arrive{from{opacity:0; transform:translateY(22px) scale(.94);}to{opacity:1; transform:translateY(0) scale(1);}}
+  @keyframes welcome-depart{to{opacity:0; transform:translateY(-12px) scale(1.02);}}
+  @keyframes spark-drift{from{transform:translateY(5px) rotate(-12deg);}to{transform:translateY(-9px) rotate(14deg);}}
+  @media (prefers-reduced-motion:reduce){.welcome-card,.welcome-spark{animation:none !important;}}
+  .gate-kicker{color:var(--gold); font-size:12px; margin:0 0 12px;}
+  .gate h1{margin-bottom:12px;}
+  .gate-copy{color:var(--dim); font-size:14px; line-height:1.6; margin:0 0 22px;}
+  .login-form label,.profile-form label{display:block; color:var(--cream); font-size:12px; margin:0 0 7px;}
+  .login-form input,.profile-form input{width:100%; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.16); border-radius:9px; color:var(--cream); font:14px 'Inter',sans-serif; padding:12px; margin-bottom:12px;}
+  .login-form button,.profile-form button,.profile-actions button{background:var(--gold); color:var(--sky1); border:0; border-radius:9px; font:600 14px 'Inter',sans-serif; padding:12px 16px; cursor:pointer;}
+  .login-form button{width:100%; margin-top:4px;}
+  .form-error{min-height:18px; color:#ff9d8f; font-size:12px; margin:10px 0 0;}
+  .gate-foot{color:var(--dim); font-size:11px; line-height:1.5; margin:18px 0 0;}
+  .page-top{display:flex; justify-content:flex-end; margin-bottom:16px;}
+  .profile-open{background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); color:var(--cream); border-radius:100px; padding:8px 13px; font:500 12px 'Inter',sans-serif; cursor:pointer;}
+  .profile-open span{color:var(--gold); margin-left:4px;}
+  .chat-who{font-family:'Fraunces',serif; font-size:16px; color:var(--gold);}
+  dialog{width:min(calc(100% - 32px),440px); border:1px solid rgba(255,255,255,.16); border-radius:16px; padding:0; color:var(--cream); background:#211747; box-shadow:0 24px 80px rgba(0,0,0,.45);}
+  dialog::backdrop{background:rgba(9,6,24,.72); backdrop-filter:blur(4px);}
+  .profile-inner{padding:24px;}
+  .profile-inner h2{font:600 23px 'Fraunces',serif; margin:0 0 6px;}
+  .profile-inner>p{color:var(--dim); font-size:13px; line-height:1.5; margin:0 0 20px;}
+  .profile-form .hint{color:var(--dim); font-size:11px; line-height:1.45; margin:-4px 0 14px;}
+  .profile-actions{display:flex; justify-content:space-between; gap:10px; margin-top:14px;}
+  .profile-actions .quiet{background:transparent; color:var(--cream); border:1px solid rgba(255,255,255,.18);}
+  .profile-actions .signout{background:transparent; color:#ff9d8f; padding-left:0;}
+  .profile-actions .save{margin-left:auto;}
+  .profile-close{float:right; background:none; border:0; color:var(--dim); font-size:22px; cursor:pointer;}
+  [hidden]{display:none !important;}
+
+  @media (max-width:540px){
+    .thread{grid-template-columns:1fr; gap:18px;}
+    .line{width:60%; height:1px; margin:0 auto; background:linear-gradient(90deg,var(--thread),var(--gold));}
+    .line::before{top:50%; left:-8px; transform:translateY(-50%);} .line::after{top:50%; right:-8px; left:auto; transform:translateY(-50%);}
+  }
+</style>
+</head>
+<body>
+<section class="gate" id="login-screen">
+  <div class="gate-inner">
+    <p class="gate-kicker">DELHI ↔ SYDNEY · JUST US</p>
+    <h1>Well, look who found their way back.</h1>
+    <p class="gate-copy">Type your little sign-in sentence and come in. No stranger-chat app required this time.</p>
+    <form class="login-form" id="login-form">
+      <label for="login-sentence">What's your sentence?</label>
+      <input id="login-sentence" name="sentence" type="password" autocomplete="current-password" placeholder="I'm ..." maxlength="200" required>
+      <button type="submit">Open our little world</button>
+      <p class="form-error" id="login-error" role="status"></p>
+    </form>
+    <p class="gate-foot">First visit? The starting sentences are “I'm Aditya” and “I'm Tishu”. Change yours in Profile so it stays just yours.</p>
+  </div>
+</section>
+
+<section class="welcome-screen" id="welcome-screen" role="dialog" aria-modal="true" aria-labelledby="welcome-title" aria-describedby="welcome-note" hidden>
+  <div class="welcome-card">
+    <button class="welcome-close" id="welcome-close" type="button" aria-label="Close welcome">×</button>
+    <span class="welcome-spark one" aria-hidden="true">✦</span>
+    <span class="welcome-spark two" aria-hidden="true">✧</span>
+    <span class="welcome-spark three" aria-hidden="true">✦</span>
+    <span class="welcome-spark four" aria-hidden="true">✧</span>
+    <p class="welcome-kicker" id="welcome-kicker">A LITTLE HELLO FROM DELHI</p>
+    <h1 class="welcome-title" id="welcome-title" tabindex="-1"></h1>
+    <p class="welcome-note" id="welcome-note">The app can wait a second. You deserve your own little entrance.</p>
+    <button class="welcome-enter" id="welcome-enter" type="button">Okay, okay. Open the app</button>
+  </div>
+</section>
+
+<main class="wrap" id="app" hidden>
+  <div class="page-top"><button class="profile-open" id="profile-open" type="button">My little corner <span id="profile-name"></span></button></div>
+  <h1>Wrong app, somehow the right person.</h1>
+  <p class="sub">A random chat with a stranger wasn't supposed to turn into this. No algorithm picked you two — you just didn't stop talking. This page is the two time zones trying to keep up with that.</p>
+
+  <div class="thread">
+    <div class="node">
+      <p class="city">Delhi</p><p class="who">Aditya</p>
+      <p class="t" id="time-delhi">--:--</p><p class="d" id="date-delhi">-</p>
+    </div>
+    <div class="line"></div>
+    <div class="node">
+      <p class="city">Sydney</p><p class="who">Tishu</p>
+      <p class="t" id="time-sydney">--:--</p><p class="d" id="date-sydney">-</p>
+    </div>
+  </div>
+  <p class="gap">Tishu is <b id="gap-text">–</b> ahead of Aditya — the only head start she's ever needed</p>
+
+  <h2 class="section">The dramatic voice deserves its own stage</h2>
+  <div class="chat">
+    <div class="chat-head">
+      <span class="note" style="margin:0;">Talking as</span>
+      <span class="chat-who" id="chat-who"></span>
+    </div>
+    <div class="msgs" id="msgs"></div>
+    <div class="chat-in">
+      <input id="msg-input" type="text" placeholder="no filter needed, she'll get it..." maxlength="300">
+      <button id="msg-send" type="button">Send</button>
+    </div>
+    <p class="note" id="sync-note">connecting…</p>
+  </div>
+
+  <div class="special">
+    <p>Some things aren't a text. Some things need the actual voice.</p>
+    <a class="connect-btn" id="connect-btn" href="#" target="_blank" rel="noopener">Call Aditya now</a>
+  </div>
+
+  <footer>matched by chance, staying by choice</footer>
+</main>
+
+<dialog id="profile-dialog" aria-labelledby="profile-title">
+  <div class="profile-inner">
+    <button type="button" class="profile-close" id="profile-close" aria-label="Close profile">×</button>
+    <h2 id="profile-title">Your little corner</h2>
+    <p>Signed in as <strong id="profile-signed-name"></strong>. Change the sentence only you know.</p>
+    <form class="profile-form" id="profile-form">
+      <label for="current-sentence">Your current sentence</label>
+      <input id="current-sentence" type="password" autocomplete="current-password" required>
+      <label for="new-sentence">A new sentence</label>
+      <input id="new-sentence" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+      <label for="confirm-sentence">Again, so we know it wasn't a typo</label>
+      <input id="confirm-sentence" type="password" autocomplete="new-password" minlength="8" maxlength="200" required>
+      <p class="hint">Use at least 8 characters. It's a shared secret, not just your name; anyone who knows it can sign in as you.</p>
+      <p class="form-error" id="profile-error" role="status"></p>
+      <div class="profile-actions">
+        <button class="signout" id="sign-out" type="button">Sign out</button>
+        <button class="quiet" id="profile-cancel" type="button">Not now</button>
+        <button class="save" type="submit">Change sentence</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<script>
+  let currentUser = null;
+  let signedInPerson = null;
+  let whatsappNumbers = {};
+  let chatSocket = null;
+  let reconnectTimer = null;
+  let welcomeTimer = null;
+  let lastMessages = [];
+
+  // ---------- Clocks ----------
+  function formatParts(date, tz){
+    const time = new Intl.DateTimeFormat('en-US', {timeZone:tz, hour:'2-digit', minute:'2-digit', hour12:true}).format(date);
+    const dateStr = new Intl.DateTimeFormat('en-US', {timeZone:tz, weekday:'long', day:'numeric', month:'short'}).format(date);
+    return {time, dateStr};
+  }
+  function tzOffsetMinutes(date, tz){
+    const parts = new Intl.DateTimeFormat('en-US',{timeZone:tz,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'})
+      .formatToParts(date).reduce((a,p)=>{a[p.type]=p.value; return a;},{});
+    const asUTC = Date.UTC(parts.year,parts.month-1,parts.day,parts.hour,parts.minute,parts.second);
+    return Math.round((asUTC - date.getTime())/60000);
+  }
+  function tick(){
+    const now = new Date();
+    const d = formatParts(now,'Asia/Kolkata'), s = formatParts(now,'Australia/Sydney');
+    document.getElementById('time-delhi').textContent = d.time;
+    document.getElementById('date-delhi').textContent = d.dateStr;
+    document.getElementById('time-sydney').textContent = s.time;
+    document.getElementById('date-sydney').textContent = s.dateStr;
+    const diff = tzOffsetMinutes(now,'Australia/Sydney') - tzOffsetMinutes(now,'Asia/Kolkata');
+    const h = Math.floor(Math.abs(diff)/60), m = Math.abs(diff)%60;
+    document.getElementById('gap-text').textContent = m ? `${h}h ${m}m` : `${h}h`;
+  }
+  tick(); setInterval(tick, 15000);
+
+  function updateCallButton(){
+    const button = document.getElementById('connect-btn');
+    const caller = signedInPerson === 'aditya' ? 'Aditya' : 'Tishu';
+    const recipient = signedInPerson === 'aditya' ? 'Tishu' : 'Aditya';
+    const recipientPerson = signedInPerson === 'aditya' ? 'tishu' : 'aditya';
+    const recipientNumber = whatsappNumbers[recipientPerson];
+    button.textContent = `Call ${recipient} now`;
+    if(!recipientNumber){
+      button.removeAttribute('href');
+      button.setAttribute('aria-disabled', 'true');
+      button.title = `Add ${recipient}'s WhatsApp number in the app configuration`;
+      return;
+    }
+    const message = encodeURIComponent(`${caller} here — some things aren't a text. Pick up.`);
+    button.href = `https://wa.me/${recipientNumber}?text=${message}`;
+    button.removeAttribute('aria-disabled');
+    button.removeAttribute('title');
+  }
+
+  fetch('/api/config').then(response=>response.json()).then(config=>{
+    whatsappNumbers = config.whatsapp_numbers || {};
+    if(signedInPerson) updateCallButton();
+  }).catch(()=>{});
+
+  // ---------- Sign in and profile ----------
+  const loginScreen = document.getElementById('login-screen');
+  const welcomeScreen = document.getElementById('welcome-screen');
+  const appScreen = document.getElementById('app');
+  const profileDialog = document.getElementById('profile-dialog');
+
+  function revealApp(){
+    loginScreen.hidden = true;
+    welcomeScreen.hidden = true;
+    appScreen.hidden = false;
+    document.getElementById('profile-name').textContent = currentUser;
+    document.getElementById('profile-signed-name').textContent = currentUser;
+    document.getElementById('chat-who').textContent = currentUser;
+    updateCallButton();
+    fetch('/api/messages').then(response=>{
+      if(!response.ok) throw new Error('Messages could not be loaded');
+      return response.json();
+    }).then(renderMessages).catch(()=>{});
+    connectChat();
+  }
+
+  function tishuWelcome(){
+    const hour = Number(new Intl.DateTimeFormat('en-AU', {
+      timeZone:'Australia/Sydney', hour:'2-digit', hourCycle:'h23'
+    }).format(new Date()));
+    const periods = [
+      {until:12, label:'GOOD MORNING IN SYDNEY', lines:[
+        "Morning, cutie. Delhi's already rooting for you.",
+        'Good morning, sleepyhead. May today be extra kind to you.',
+        'Hey, sunshine. You make even the early hours look lovely.',
+        'Up and at it, little star. Go make the day jealous.'
+      ]},
+      {until:17, label:'A LITTLE AFTERNOON HELLO', lines:[
+        'Hey, cutie. I hope you remembered to eat something nice.',
+        'Afternoon, pretty girl. You are doing better than you think.',
+        'Hi, favorite distraction. Please drink some water for me.',
+        'Hello, darling. Hope the day is being gentle with you.'
+      ]},
+      {until:21, label:'EVENING, SYDNEY', lines:[
+        'Hey, gorgeous. You made it through another day.',
+        'Evening, cutie. Tell me the most dramatic part of today.',
+        "Look who's still the best part of my day.",
+        'Good evening, little star. Save one tiny moment for us.'
+      ]},
+      {until:24, label:'A SOFT GOODNIGHT FROM DELHI', lines:[
+        'Goodnight, cutie. Sydney can borrow you back tomorrow.',
+        'Long day, little star? Come rest those dramatic thoughts.',
+        'Sleep well, favorite person. Delhi is sending a soft hug.',
+        'Okay, sleepyhead. Tomorrow can wait a minute. You are home.'
+      ]}
+    ];
+    const period = periods.find(item=>hour < item.until) || periods[0];
+    let recent = [];
+    try{
+      const stored = JSON.parse(localStorage.getItem('tishu-welcome-history') || '[]');
+      if(Array.isArray(stored)) recent = stored;
+    }catch(err){}
+    const unused = period.lines.filter(line=>!recent.includes(line));
+    const choices = unused.length ? unused : period.lines.filter(line=>line !== recent[recent.length - 1]);
+    const line = choices[Math.floor(Math.random() * choices.length)];
+    try{ localStorage.setItem('tishu-welcome-history', JSON.stringify([...recent, line].slice(-12))); }catch(err){}
+    return {label:period.label, line};
+  }
+
+  function finishWelcome(){
+    if(welcomeScreen.hidden) return;
+    clearTimeout(welcomeTimer);
+    welcomeScreen.classList.add('is-leaving');
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    welcomeTimer = setTimeout(()=>{
+      welcomeScreen.hidden = true;
+      welcomeScreen.classList.remove('is-leaving');
+      welcomeTimer = null;
+      revealApp();
+    }, reducedMotion ? 0 : 380);
+  }
+
+  function enterApp(session, celebrateTishu=false){
+    signedInPerson = session.person;
+    currentUser = session.name;
+    if(celebrateTishu && signedInPerson === 'tishu'){
+      const welcome = tishuWelcome();
+      document.getElementById('welcome-kicker').textContent = welcome.label;
+      document.getElementById('welcome-title').textContent = welcome.line;
+      loginScreen.hidden = true;
+      appScreen.hidden = true;
+      welcomeScreen.hidden = false;
+      document.getElementById('welcome-title').focus({preventScroll:true});
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      welcomeTimer = setTimeout(finishWelcome, reducedMotion ? 1400 : 4600);
+      return;
+    }
+    revealApp();
+  }
+
+  document.getElementById('welcome-enter').addEventListener('click', finishWelcome);
+  document.getElementById('welcome-close').addEventListener('click', finishWelcome);
+  welcomeScreen.addEventListener('keydown', event=>{
+    if(event.key === 'Escape') finishWelcome();
+  });
+
+  function leaveApp(){
+    signedInPerson = null;
+    currentUser = null;
+    clearTimeout(welcomeTimer);
+    welcomeTimer = null;
+    welcomeScreen.hidden = true;
+    if(chatSocket){
+      chatSocket.onclose = null;
+      chatSocket.close();
+      chatSocket = null;
+    }
+    clearTimeout(reconnectTimer);
+    appScreen.hidden = true;
+    loginScreen.hidden = false;
+    document.getElementById('login-sentence').value = '';
+  }
+
+  document.getElementById('login-form').addEventListener('submit', async event=>{
+    event.preventDefault();
+    const sentence = document.getElementById('login-sentence').value;
+    const error = document.getElementById('login-error');
+    error.textContent = '';
+    try{
+      const response = await fetch('/api/auth/login', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sentence})
+      });
+      const result = await response.json();
+      if(!response.ok) throw new Error(result.detail || 'That sentence didn’t sound quite right.');
+      event.target.reset();
+      enterApp(result, true);
+    }catch(err){ error.textContent = err.message || 'Couldn’t open the door just now. Try again?'; }
+  });
+
+  document.getElementById('profile-open').addEventListener('click', ()=>{
+    document.getElementById('profile-error').textContent = '';
+    profileDialog.showModal();
+  });
+  document.getElementById('profile-close').addEventListener('click', ()=>profileDialog.close());
+  document.getElementById('profile-cancel').addEventListener('click', ()=>profileDialog.close());
+  document.getElementById('profile-form').addEventListener('submit', async event=>{
+    event.preventDefault();
+    const error = document.getElementById('profile-error');
+    const currentSentence = document.getElementById('current-sentence').value;
+    const newSentence = document.getElementById('new-sentence').value;
+    const confirmation = document.getElementById('confirm-sentence').value;
+    error.textContent = '';
+    if(newSentence !== confirmation){ error.textContent = 'Those new sentences don’t match. One more try?'; return; }
+    try{
+      const response = await fetch('/api/auth/login-sentence', {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({current_sentence:currentSentence, new_sentence:newSentence})
+      });
+      const result = await response.json();
+      if(!response.ok) throw new Error(result.detail || 'Couldn’t change that sentence.');
+      event.target.reset();
+      profileDialog.close();
+      document.getElementById('sync-note').textContent = 'new secret sentence, same dramatic voice ✦';
+    }catch(err){ error.textContent = err.message || 'Couldn’t change that sentence just now.'; }
+  });
+  document.getElementById('sign-out').addEventListener('click', async ()=>{
+    try{ await fetch('/api/auth/logout', {method:'POST'}); }catch(err){}
+    profileDialog.close();
+    leaveApp();
+  });
+
+  fetch('/api/auth/session').then(response=>{
+    if(!response.ok) throw new Error('Sign-in needed');
+    return response.json();
+  }).then(enterApp).catch(()=>{
+    loginScreen.hidden = false;
+    appScreen.hidden = true;
+  });
+
+  // ---------- Messages ----------
+  function renderMessages(list){
+    lastMessages = list;
+    const box = document.getElementById('msgs');
+    if(!list.length){ box.innerHTML = ''; return; }
+    box.innerHTML = '';
+    list.forEach(m=>{
+      const div = document.createElement('div');
+      div.className = 'msg ' + (m.from === currentUser ? 'me' : 'them');
+      const textSpan = document.createElement('span');
+      textSpan.textContent = m.text;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = m.from + (m.ts ? ' · ' + new Date(m.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '');
+      div.appendChild(textSpan); div.appendChild(meta);
+      box.appendChild(div);
+    });
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function sendMessage(){
+    const input = document.getElementById('msg-input');
+    const text = input.value.trim();
+    if(!text) return;
+    input.value = '';
+    if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
+      document.getElementById('sync-note').textContent = 'chat is reconnecting; your message is still here';
+      input.value = text;
+      return;
+    }
+    chatSocket.send(JSON.stringify({text}));
+  }
+  document.getElementById('msg-send').addEventListener('click', sendMessage);
+  document.getElementById('msg-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });
+
+  // ---------- Shared REST + WebSocket connection ----------
+  function connectChat(){
+    if(!signedInPerson) return;
+    const note = document.getElementById('sync-note');
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    chatSocket = new WebSocket(`${protocol}//${location.host}/ws/chat`);
+    chatSocket.addEventListener('open', ()=>{ note.textContent = 'connected ✦ the dramatic voice is live'; });
+    chatSocket.addEventListener('message', event=>{
+      const payload = JSON.parse(event.data);
+      if(payload.type === 'history') renderMessages(payload.messages || []);
+      if(payload.type === 'message') renderMessages([...lastMessages, payload.message]);
+      if(payload.type === 'error') note.textContent = payload.message;
+    });
+    chatSocket.addEventListener('close', event=>{
+      if(event.code === 4401){ leaveApp(); return; }
+      if(!signedInPerson) return;
+      note.textContent = 'chat wandered off; trying to bring it back…';
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectChat, 2500);
+    });
+    chatSocket.addEventListener('error', ()=>chatSocket.close());
+  }
+</script>
+</body>
+</html>

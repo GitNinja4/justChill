@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: aditya-and-tishu
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: DATABASE_PATH
+        value: ./data/relationship.sqlite3
+      - key: ADITYA_WHATSAPP_NUMBER
+        sync: false
+      - key: TISHU_WHATSAPP_NUMBER
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://aditya-and-tishu.onrender.com
