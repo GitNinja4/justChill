@@ -30,7 +30,7 @@ The Render Blueprint provisions a paid Postgres database and injects its private
 
 The page itself, REST API, and WebSocket are served by the same FastAPI service. No separate frontend hosting or external database is needed. A person's sign-in session determines their chat name and which WhatsApp number the call button targets.
 
-Messages, deletion state, reactions, sessions, sign-in hashes, and the shared welcome sentence are stored in the database. Existing databases are upgraded on startup with the message deletion, reactions, and settings tables/columns. Message deletion is a server-authorized soft delete: the original text is cleared and the other connected client receives the deleted state.
+Messages, deletion state, reactions, letters, profiles, sessions, sign-in hashes, and the shared welcome sentence are stored in the database. New letters appear immediately in both envelope inboxes and remain there until the recipient opens them. On open, the note is removed for both participants and shown to the reader; a WebSocket event updates the other live inbox immediately. Each person's display name can be changed in **My little corner**; message ownership uses a stable account ID, so renaming does not affect deletion permissions. Existing databases are upgraded on startup with sender IDs, profiles, message deletion, reactions, settings, and postcard schema. Message deletion is a server-authorized soft delete: the original text is cleared and the other connected client receives the deleted state.
 
 ## Sign-in notes
 

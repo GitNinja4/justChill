@@ -95,6 +95,7 @@ def initialize_db():
             f"""CREATE TABLE IF NOT EXISTS messages (
                 id {message_id_type},
                 sender TEXT NOT NULL,
+                sender_id TEXT,
                 text TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 deleted_at TEXT,
@@ -123,11 +124,27 @@ def initialize_db():
                 setting_value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )""",
+            """CREATE TABLE IF NOT EXISTS profiles (
+                person TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""",
+            f"""CREATE TABLE IF NOT EXISTS postcards (
+                id {message_id_type},
+                sender_id TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                reveal_at TEXT NOT NULL,
+                opened_at TEXT
+            )""",
             "CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at)",
             "CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions (message_id)",
+            "CREATE INDEX IF NOT EXISTS idx_postcards_recipient_reveal ON postcards (recipient_id, reveal_at)",
         )
         for statement in statements:
             connection.execute(statement)
+        connection.execute("DELETE FROM postcards WHERE opened_at IS NOT NULL")
         if DATABASE_URL:
             existing_columns = {
                 row["column_name"]
@@ -144,6 +161,21 @@ def initialize_db():
             connection.execute("ALTER TABLE messages ADD COLUMN deleted_at TEXT")
         if "deleted_by" not in existing_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN deleted_by TEXT")
+        if "sender_id" not in existing_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN sender_id TEXT")
+        for person, name in PEOPLE.items():
+            profile_exists = connection.execute(
+                "SELECT 1 FROM profiles WHERE person = ?", (person,)
+            ).fetchone()
+            if not profile_exists:
+                connection.execute(
+                    "INSERT INTO profiles (person, display_name, updated_at) VALUES (?, ?, ?)",
+                    (person, name, datetime.now(timezone.utc).isoformat()),
+                )
+            connection.execute(
+                "UPDATE messages SET sender_id = ? WHERE sender = ? AND sender_id IS NULL",
+                (person, name),
+            )
         for person, phrase in (("aditya", "I'm Aditya"), ("tishu", "I'm Tishu")):
             exists = connection.execute(
                 "SELECT 1 FROM sign_in_phrases WHERE person = ?", (person,)
@@ -195,6 +227,14 @@ class ChangeSentenceRequest(BaseModel):
 
 class SettingRequest(BaseModel):
     value: str = Field(min_length=1, max_length=300)
+
+
+class DisplayNameRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=40)
+
+
+class PostcardRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
 
 
 def hash_phrase(phrase: str, salt: bytes | None = None):
@@ -255,11 +295,20 @@ def validate_person(person: str):
         raise HTTPException(status_code=404, detail="That person isn't on this little map.")
 
 
-def serialize_message(row):
+def profile_name(connection, person: str):
+    row = connection.execute(
+        "SELECT display_name FROM profiles WHERE person = ?", (person,)
+    ).fetchone()
+    return row["display_name"] if row else PEOPLE[person]
+
+
+def serialize_message(row, connection):
     created_at = datetime.fromisoformat(row["created_at"])
+    sender_id = row["sender_id"]
     return {
         "id": row["id"],
-        "from": row["sender"],
+        "person": sender_id,
+        "from": profile_name(connection, sender_id) if sender_id in PEOPLE else row["sender"],
         "text": "This message was deleted." if row["deleted_at"] else row["text"],
         "deleted": bool(row["deleted_at"]),
         "ts": int(created_at.timestamp() * 1000),
@@ -269,12 +318,12 @@ def serialize_message(row):
 
 def message_with_reactions(connection, message_id):
     row = connection.execute(
-        "SELECT id, sender, text, created_at, deleted_at FROM messages WHERE id = ?",
+        "SELECT id, sender, sender_id, text, created_at, deleted_at FROM messages WHERE id = ?",
         (message_id,),
     ).fetchone()
     if not row:
         return None
-    message = serialize_message(row)
+    message = serialize_message(row, connection)
     reactions = connection.execute(
         "SELECT person, emoji FROM reactions WHERE message_id = ? ORDER BY person",
         (message_id,),
@@ -308,7 +357,113 @@ async def get_config():
 @app.get("/api/auth/session")
 async def get_auth_session(request: Request):
     person = authenticated_person(request)
-    return {"person": person, "name": PEOPLE[person]}
+    with database() as connection:
+        name = profile_name(connection, person)
+    return {"person": person, "name": name}
+
+
+@app.put("/api/profile/display-name")
+async def update_display_name(payload: DisplayNameRequest, request: Request):
+    person = authenticated_person(request)
+    display_name = payload.display_name.strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Enter a name before saving.")
+    now = datetime.now(timezone.utc).isoformat()
+    with database() as connection:
+        other = connection.execute(
+            "SELECT person FROM profiles WHERE lower(display_name) = lower(?) AND person != ?",
+            (display_name, person),
+        ).fetchone()
+        if other:
+            raise HTTPException(status_code=409, detail="That display name is already in use.")
+        connection.execute(
+            "UPDATE profiles SET display_name = ?, updated_at = ? WHERE person = ?",
+            (display_name, now, person),
+        )
+    await broadcast({"type": "profile_updated", "person": person, "name": display_name})
+    return {"ok": True, "person": person, "name": display_name}
+
+
+@app.get("/api/postcards")
+async def get_postcards(request: Request):
+    person = authenticated_person(request)
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT id, sender_id, recipient_id, text, created_at, reveal_at, opened_at "
+            "FROM postcards WHERE (sender_id = ? OR recipient_id = ?) AND opened_at IS NULL "
+            "ORDER BY created_at DESC, id DESC LIMIT 100",
+            (person, person),
+        ).fetchall()
+        postcards = []
+        for row in reversed(rows):
+            postcards.append({
+                "id": row["id"],
+                "from": profile_name(connection, row["sender_id"]),
+                "to": profile_name(connection, row["recipient_id"]),
+                "text": row["text"] if row["sender_id"] == person else None,
+                "sent": row["sender_id"] == person,
+                "sent_at": row["created_at"],
+                "status": "unread",
+            })
+    return postcards
+
+
+@app.post("/api/postcards")
+async def create_postcard(payload: PostcardRequest, request: Request):
+    sender = authenticated_person(request)
+    recipient = "tishu" if sender == "aditya" else "aditya"
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Write a little note before sending.")
+    created_at = datetime.now(timezone.utc)
+    sent_at = created_at.isoformat()
+    with database() as connection:
+        insert_query = (
+            "INSERT INTO postcards (sender_id, recipient_id, text, created_at, reveal_at) "
+            "VALUES (?, ?, ?, ?, ?)"
+        )
+        if DATABASE_URL:
+            insert_query += " RETURNING id"
+        cursor = connection.execute(
+            insert_query,
+            (sender, recipient, text, sent_at, sent_at),
+        )
+        postcard_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
+        recipient_name = profile_name(connection, recipient)
+    await broadcast({"type": "postcard_created", "id": postcard_id, "recipient": recipient})
+    return {
+        "ok": True,
+        "id": postcard_id,
+        "recipient": recipient,
+        "recipient_name": recipient_name,
+    }
+
+
+@app.post("/api/postcards/{postcard_id}/open")
+async def open_postcard(postcard_id: int, request: Request):
+    person = authenticated_person(request)
+    with database() as connection:
+        lock_clause = " FOR UPDATE" if DATABASE_URL else ""
+        row = connection.execute(
+            "SELECT id, sender_id, recipient_id, text, created_at, reveal_at, opened_at "
+            f"FROM postcards WHERE id = ?{lock_clause}", (postcard_id,),
+        ).fetchone()
+        if not row or row["recipient_id"] != person:
+            raise HTTPException(status_code=404, detail="That postcard is not for you.")
+        newly_opened = row["opened_at"] is None
+        postcard = {
+            "id": row["id"],
+            "from": profile_name(connection, row["sender_id"]),
+            "to": profile_name(connection, row["recipient_id"]),
+            "text": row["text"],
+            "sent": False,
+            "opened": True,
+            "newly_opened": newly_opened,
+            "status": "opened",
+        }
+        connection.execute("DELETE FROM postcards WHERE id = ?", (postcard_id,))
+    await broadcast({"type": "postcard_removed", "id": postcard_id})
+    return postcard
 
 
 @app.get("/api/settings/welcome-sentence")
@@ -388,7 +543,9 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         samesite="strict",
         path="/",
     )
-    return {"person": person, "name": PEOPLE[person]}
+    with database() as connection:
+        name = profile_name(connection, person)
+    return {"person": person, "name": name}
 
 
 @app.post("/api/auth/logout")
@@ -448,11 +605,11 @@ async def delete_message(message_id: int, request: Request):
     person = authenticated_person(request)
     with database() as connection:
         row = connection.execute(
-            "SELECT sender, deleted_at FROM messages WHERE id = ?", (message_id,)
+            "SELECT sender, sender_id, deleted_at FROM messages WHERE id = ?", (message_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="That message no longer exists.")
-        if row["sender"] != PEOPLE[person]:
+        if row["sender_id"] != person:
             raise HTTPException(status_code=403, detail="You can only delete your own messages.")
         if row["deleted_at"]:
             return {"ok": True}
@@ -547,13 +704,14 @@ async def chat_socket(websocket: WebSocket):
                 continue
             created_at = datetime.now(timezone.utc).isoformat()
             with database() as connection:
-                insert_query = "INSERT INTO messages (sender, text, created_at) VALUES (?, ?, ?)"
+                sender_name = profile_name(connection, person)
+                insert_query = "INSERT INTO messages (sender, sender_id, text, created_at) VALUES (?, ?, ?, ?)"
                 if DATABASE_URL:
                     insert_query += " RETURNING id"
-                cursor = connection.execute(insert_query, (PEOPLE[person], text, created_at))
+                cursor = connection.execute(insert_query, (sender_name, person, text, created_at))
                 message_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
                 row = connection.execute(
-                    "SELECT id, sender, text, created_at, deleted_at FROM messages WHERE id = ?", (message_id,)
+                    "SELECT id, sender, sender_id, text, created_at, deleted_at FROM messages WHERE id = ?", (message_id,)
                 ).fetchone()
                 saved_message = message_with_reactions(connection, message_id)
             await broadcast({"type": "message", "message": saved_message})
