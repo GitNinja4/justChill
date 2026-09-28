@@ -53,6 +53,12 @@
   .msg{max-width:78%; padding:9px 13px; border-radius:14px; font-size:14px; line-height:1.4;}
   .msg.me{align-self:flex-end; background:var(--coral); color:var(--sky1); border-bottom-right-radius:4px;}
   .msg.them{align-self:flex-start; background:rgba(255,255,255,0.08); border-bottom-left-radius:4px;}
+  .msg.deleted{font-style:italic; opacity:.72;}
+  .msg-actions{display:flex; gap:4px; margin-top:6px; opacity:.7;}
+  .msg-actions button{border:1px solid rgba(255,255,255,.14); border-radius:999px; background:rgba(0,0,0,.12); color:inherit; cursor:pointer; font-size:12px; padding:3px 6px;}
+  .msg-actions button:hover,.msg-actions button:focus-visible{background:rgba(255,255,255,.18); opacity:1;}
+  .reactions{display:flex; gap:4px; flex-wrap:wrap; margin-top:5px;}
+  .reaction{font-size:12px; border-radius:999px; padding:2px 6px; background:rgba(0,0,0,.16);}
   .msg .meta{display:block; font-size:10px; opacity:0.65; margin-top:3px;}
   .empty{color:var(--dim); font-size:13px; text-align:center; padding:18px 0;}
   .chat-in{display:flex; gap:8px; margin-top:10px;}
@@ -108,7 +114,6 @@
   .profile-inner>p{color:var(--dim); font-size:13px; line-height:1.5; margin:0 0 20px;}
   .profile-form .hint{color:var(--dim); font-size:11px; line-height:1.45; margin:-4px 0 14px;}
   .profile-actions{display:flex; justify-content:space-between; gap:10px; margin-top:14px;}
-  .profile-actions .quiet{background:transparent; color:var(--cream); border:1px solid rgba(255,255,255,.18);}
   .profile-actions .signout{background:transparent; color:#ff9d8f; padding-left:0;}
   .profile-actions .save{margin-left:auto;}
   .profile-close{float:right; background:none; border:0; color:var(--dim); font-size:22px; cursor:pointer;}
@@ -207,7 +212,6 @@
       <p class="form-error" id="profile-error" role="status"></p>
       <div class="profile-actions">
         <button class="signout" id="sign-out" type="button">Sign out</button>
-        <button class="quiet" id="profile-cancel" type="button">Not now</button>
         <button class="save" type="submit">Change sentence</button>
       </div>
     </form>
@@ -411,7 +415,6 @@
     profileDialog.showModal();
   });
   document.getElementById('profile-close').addEventListener('click', ()=>profileDialog.close());
-  document.getElementById('profile-cancel').addEventListener('click', ()=>profileDialog.close());
   document.getElementById('profile-form').addEventListener('submit', async event=>{
     event.preventDefault();
     const error = document.getElementById('profile-error');
@@ -454,13 +457,46 @@
     box.innerHTML = '';
     list.forEach(m=>{
       const div = document.createElement('div');
-      div.className = 'msg ' + (m.from === currentUser ? 'me' : 'them');
+      div.className = 'msg ' + (m.from === currentUser ? 'me' : 'them') + (m.deleted ? ' deleted' : '');
+      div.dataset.messageId = m.id;
       const textSpan = document.createElement('span');
       textSpan.textContent = m.text;
       const meta = document.createElement('span');
       meta.className = 'meta';
       meta.textContent = m.from + (m.ts ? ' · ' + new Date(m.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '');
       div.appendChild(textSpan); div.appendChild(meta);
+      if(m.reactions && m.reactions.length){
+        const reactions = document.createElement('div');
+        reactions.className = 'reactions';
+        m.reactions.forEach(reaction=>{
+          const pill = document.createElement('span');
+          pill.className = 'reaction';
+          pill.textContent = reaction.emoji;
+          pill.title = reaction.person;
+          reactions.appendChild(pill);
+        });
+        div.appendChild(reactions);
+      }
+      if(!m.deleted){
+        const actions = document.createElement('div');
+        const ownReaction = (m.reactions || []).find(reaction=>reaction.person.toLowerCase() === signedInPerson);
+        actions.className = 'msg-actions';
+        ['❤️','👍','😂','😍','😢','😮','😡','👏'].forEach(emoji=>{
+          const button = document.createElement('button');
+          button.type = 'button'; button.dataset.action = 'react'; button.dataset.emoji = emoji;
+          if(ownReaction && ownReaction.emoji === emoji) button.dataset.remove = 'true';
+          button.textContent = emoji;
+          button.setAttribute('aria-label', `React ${emoji}`);
+          actions.appendChild(button);
+        });
+        if(m.from === currentUser){
+          const deleteButton = document.createElement('button');
+          deleteButton.type = 'button'; deleteButton.dataset.action = 'delete'; deleteButton.textContent = '×';
+          deleteButton.setAttribute('aria-label', 'Delete message');
+          actions.appendChild(deleteButton);
+        }
+        div.appendChild(actions);
+      }
       box.appendChild(div);
     });
     box.scrollTop = box.scrollHeight;
@@ -480,6 +516,22 @@
   }
   document.getElementById('msg-send').addEventListener('click', sendMessage);
   document.getElementById('msg-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });
+  document.getElementById('msgs').addEventListener('click', async event=>{
+    const button = event.target.closest('button[data-action]');
+    if(!button) return;
+    const message = button.closest('.msg');
+    const messageId = message && message.dataset.messageId;
+    if(!messageId) return;
+    const action = button.dataset.action;
+    const endpoint = action === 'delete' ? `/api/messages/${messageId}` : `/api/messages/${messageId}/reaction`;
+    const options = action === 'delete' ? {method:'DELETE'} : {
+      method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({emoji:button.dataset.remove === 'true' ? '' : button.dataset.emoji})
+    };
+    try{
+      const response = await fetch(endpoint, options);
+      if(!response.ok){ const result = await response.json(); throw new Error(result.detail || 'That action could not be saved.'); }
+    }catch(err){ document.getElementById('sync-note').textContent = err.message; }
+  });
 
   // ---------- Shared REST + WebSocket connection ----------
   function connectChat(){
@@ -492,6 +544,7 @@
       const payload = JSON.parse(event.data);
       if(payload.type === 'history') renderMessages(payload.messages || []);
       if(payload.type === 'message') renderMessages([...lastMessages, payload.message]);
+      if(payload.type === 'message_updated') renderMessages(lastMessages.map(message=>message.id === payload.message.id ? payload.message : message));
       if(payload.type === 'error') note.textContent = payload.message;
     });
     chatSocket.addEventListener('close', event=>{

@@ -8,11 +8,21 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
-      - key: DATABASE_PATH
-        value: ./data/relationship.sqlite3
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aditya-and-tishu-db
+          property: connectionString
       - key: ADITYA_WHATSAPP_NUMBER
         sync: false
       - key: TISHU_WHATSAPP_NUMBER
         sync: false
       - key: CORS_ORIGINS
         value: https://aditya-and-tishu.onrender.com
+
+databases:
+  - name: aditya-and-tishu-db
+    databaseName: aditya_tishu
+    user: aditya_tishu
+    plan: 0.1c-256mb
+    region: oregon
+    ipAllowList: []
