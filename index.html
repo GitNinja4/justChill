@@ -174,7 +174,28 @@
     padding:13px 24px; border-radius:100px; border:none; cursor:pointer; text-decoration:none;}
   .call-start-actions{display:flex; justify-content:center; flex-wrap:wrap; gap:9px;}
   .connect-btn.video-call{background:var(--gold);}
+  .connect-btn.history-call{border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.07); color:var(--cream);}
   .call-availability{min-height:16px; margin:12px 0 0 !important; font-size:11px !important;}
+  dialog.call-history-dialog{width:min(calc(100% - 28px),520px); max-height:min(85dvh,720px); overflow:hidden; background:#15132a;}
+  .call-history{padding:18px; text-align:left;}
+  .call-history-heading{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:7px;}
+  .call-history-heading-actions{display:flex; align-items:center; gap:7px;}
+  .call-history-heading h2{margin:0; color:var(--cream); font:400 19px 'Fraunces',serif;}
+  .call-history-refresh,.call-history-close{width:34px; height:34px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.15); border-radius:50%; background:rgba(255,255,255,.06); color:var(--cream); cursor:pointer;}
+  .call-history-refresh{font-size:18px;}
+  .call-history-close{font:22px/1 'Inter',sans-serif;}
+  .call-history-refresh:hover,.call-history-refresh:focus-visible,.call-history-close:hover,.call-history-close:focus-visible{background:rgba(255,255,255,.14);}
+  .call-history-status{min-height:18px; margin:4px 0 0 !important; color:var(--dim) !important; font-size:11px !important; text-align:left;}
+  .call-history-list{display:grid; max-height:min(56dvh,460px); overflow-y:auto; scrollbar-width:none; -ms-overflow-style:none; margin:0; padding:0; list-style:none;}
+  .call-history-list::-webkit-scrollbar{display:none;}
+  .call-history-entry{display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:11px 2px; border-top:1px solid rgba(255,255,255,.08);}
+  .call-history-route{display:block; color:var(--cream); font-size:12px; font-weight:600; overflow-wrap:anywhere;}
+  .call-history-detail{display:block; margin-top:4px; color:var(--dim); font-size:10px;}
+  .call-history-outcome{color:var(--cream); font-size:11px; text-align:right;}
+  .call-history-duration{display:block; margin-top:4px; color:var(--dim); font-size:10px;}
+  .call-history-outcome.missed,.call-history-outcome.declined,.call-history-outcome.failed,.call-history-outcome.dropped{color:#ffaaa1;}
+  .call-history-outcome.completed{color:#8ed6b3;}
+  .call-history-status.error{color:#ffaaa1 !important;}
   dialog.call-dialog{width:min(calc(100% - 28px),620px); max-height:min(90dvh,760px); overflow:hidden; background:#15132a;}
   .call-panel{padding:18px;}
   .call-heading{display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px;}
@@ -194,7 +215,7 @@
   .call-control.decline,.call-control.end{border-color:transparent; background:#e65e65; color:#25080b;}
   .call-control:disabled{opacity:.55; cursor:wait;}
   .connect-btn:focus-visible{outline:2px solid var(--gold); outline-offset:3px;}
-  @media (max-width:540px){.call-panel{padding:12px;}.call-stage{min-height:250px;}.call-control{min-height:40px;padding:0 12px;}}
+  @media (max-width:540px){.call-panel{padding:12px;}.call-stage{min-height:250px;}.call-control{min-height:40px;padding:0 12px;}.call-history{padding:14px;}}
   footer{text-align:center; color:var(--dim); font-size:11.5px; margin-top:30px; opacity:0.7;}
   .gate{min-height:100%; display:grid; place-items:center; padding:24px;}
   .gate-inner{width:min(100%,420px); padding:30px 26px; border:1px solid rgba(255,255,255,.12); border-radius:18px; background:rgba(19,12,48,.72); box-shadow:0 24px 80px rgba(0,0,0,.24);}
@@ -233,10 +254,28 @@
   .chat-who{font-family:'Fraunces',serif; font-size:16px; color:var(--gold);}
   dialog{width:min(calc(100% - 32px),440px); border:1px solid rgba(255,255,255,.16); border-radius:16px; padding:0; color:var(--cream); background:#211747; box-shadow:0 24px 80px rgba(0,0,0,.45);}
   dialog::backdrop{background:rgba(9,6,24,.72); backdrop-filter:blur(4px);}
+  #profile-dialog{max-height:calc(100dvh - 32px); overflow-y:auto; scrollbar-width:none; -ms-overflow-style:none;}
+  #profile-dialog::-webkit-scrollbar{display:none;}
   .profile-inner{padding:24px;}
   .profile-inner h2{font:600 23px 'Fraunces',serif; margin:0 0 6px;}
   .profile-inner>p{color:var(--dim); font-size:13px; line-height:1.5; margin:0 0 20px;}
   .profile-form .hint{color:var(--dim); font-size:11px; line-height:1.45; margin:-4px 0 14px;}
+  .profile-location{margin:18px 0; padding-top:15px; border-top:1px solid rgba(255,255,255,.12);}
+  .profile-location h3{margin:0 0 7px; color:var(--cream); font:400 18px 'Fraunces',serif;}
+  .profile-location-current,.profile-location-note{color:var(--dim); font-size:11px; line-height:1.5; margin:5px 0;}
+  .profile-location-credit{border:0; padding:0; background:transparent; color:var(--gold); font:500 10px 'Inter',sans-serif; text-decoration:underline; text-underline-offset:2px; cursor:pointer; vertical-align:2px;}
+  .profile-location-credit:hover,.profile-location-credit:focus-visible{color:var(--cream);}
+  .location-credit-inner{padding:22px;}
+  .location-credit-heading{display:flex; align-items:center; justify-content:space-between; gap:12px;}
+  .location-credit-heading h2{margin:0; color:var(--cream); font:400 21px 'Fraunces',serif;}
+  .location-credit-copy{color:var(--dim); font-size:13px; line-height:1.6; margin:14px 0 10px;}
+  .location-credit-link{color:var(--gold); font-size:12px;}
+  .profile-location-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
+  .profile-location-actions button{border:1px solid rgba(255,255,255,.16); border-radius:8px; padding:9px 11px; background:rgba(255,255,255,.07); color:var(--cream); font:600 11px 'Inter',sans-serif; cursor:pointer;}
+  .profile-location-actions button:first-child{border-color:transparent; background:var(--gold); color:var(--sky1);}
+  .profile-location-actions button:disabled{opacity:.6; cursor:wait;}
+  .profile-location-status{min-height:17px; margin:8px 0 0; color:var(--dim); font-size:11px;}
+  .profile-location-status.error{color:#ffaaa1;}
   .profile-actions{display:flex; justify-content:space-between; gap:10px; margin-top:14px;}
   .profile-actions .signout{background:transparent; color:#ff9d8f; padding-left:0;}
   .profile-actions .save{margin-left:auto;}
@@ -260,7 +299,7 @@
 <body>
 <section class="gate" id="auth-loading" role="status" aria-live="polite">
   <div class="gate-inner">
-    <p class="gate-kicker">DELHI ↔ SYDNEY · JUST US</p>
+    <p class="gate-kicker">TWO CITIES · JUST US</p>
     <h1>Opening your little corner.</h1>
     <p class="auth-loading-copy" id="auth-loading-copy">Checking your sign-in…</p>
     <button class="auth-retry" id="auth-retry" type="button" hidden>Try again</button>
@@ -269,7 +308,7 @@
 
 <section class="gate" id="login-screen" hidden>
   <div class="gate-inner">
-    <p class="gate-kicker">DELHI ↔ SYDNEY · JUST US</p>
+    <p class="gate-kicker">TWO CITIES · JUST US</p>
     <h1>Well, look who found their way back.</h1>
     <p class="gate-copy">Type your little sign-in sentence and come in. No stranger-chat app required this time.</p>
     <form class="login-form" id="login-form">
@@ -289,7 +328,7 @@
     <span class="welcome-spark two" aria-hidden="true">✧</span>
     <span class="welcome-spark three" aria-hidden="true">✦</span>
     <span class="welcome-spark four" aria-hidden="true">✧</span>
-    <p class="welcome-kicker" id="welcome-kicker">A LITTLE HELLO FROM DELHI</p>
+    <p class="welcome-kicker" id="welcome-kicker">A LITTLE HELLO FROM HERE</p>
     <h1 class="welcome-title" id="welcome-title" tabindex="-1"></h1>
     <p class="welcome-note" id="welcome-note">The app can wait a second. You deserve your own little entrance.</p>
     <button class="welcome-enter" id="welcome-enter" type="button">Okay, okay. Open the app</button>
@@ -310,16 +349,16 @@
 
   <div class="thread">
     <div class="node">
-      <p class="city">Delhi</p><p class="who">Aditya</p>
-      <p class="t" id="time-delhi">--:--</p><p class="d" id="date-delhi">-</p>
+      <p class="city" id="city-aditya">Delhi</p><p class="who">Aditya</p>
+      <p class="t" id="time-aditya">--:--</p><p class="d" id="date-aditya">-</p>
     </div>
     <div class="line"></div>
     <div class="node">
-      <p class="city">Sydney</p><p class="who">Tishu</p>
-      <p class="t" id="time-sydney">--:--</p><p class="d" id="date-sydney">-</p>
+      <p class="city" id="city-tishu">Sydney</p><p class="who">Tishu</p>
+      <p class="t" id="time-tishu">--:--</p><p class="d" id="date-tishu">-</p>
     </div>
   </div>
-  <p class="gap">Tishu is <b id="gap-text">–</b> ahead of Aditya — the only head start she's ever needed</p>
+  <p class="gap"><b id="gap-text">The two local times are loading</b></p>
 
   <h2 class="section">The dramatic voice deserves its own stage</h2>
   <div class="chat">
@@ -343,12 +382,27 @@
     <div class="call-start-actions">
       <button class="connect-btn" id="audio-call-start" type="button">Start audio call</button>
       <button class="connect-btn video-call" id="video-call-start" type="button">Start video call</button>
+      <button class="connect-btn history-call" id="call-history-open" type="button">Call history</button>
     </div>
     <p class="call-availability" id="call-availability" role="status">Audio and video calls stay in this page.</p>
   </div>
 
   <footer>matched by chance, staying by choice</footer>
 </main>
+
+<dialog id="call-history-dialog" class="call-history-dialog" aria-labelledby="call-history-title">
+  <section class="call-history" aria-label="Call history">
+    <div class="call-history-heading">
+      <h2 id="call-history-title">Recent calls</h2>
+      <div class="call-history-heading-actions">
+        <button class="call-history-refresh" id="call-history-refresh" type="button" aria-label="Refresh call history" title="Refresh call history">↻</button>
+        <button class="call-history-close" id="call-history-close" type="button" aria-label="Close call history" title="Close">×</button>
+      </div>
+    </div>
+    <p class="call-history-status" id="call-history-status" role="status" aria-live="polite">Loading call history…</p>
+    <ol class="call-history-list" id="call-history-list" aria-label="Recent calls"></ol>
+  </section>
+</dialog>
 
 <dialog id="call-dialog" class="call-dialog" aria-labelledby="call-peer-name">
   <div class="call-panel">
@@ -470,6 +524,16 @@
       <p class="form-error" id="display-name-error" role="status"></p>
       <button type="submit">Save name</button>
     </form>
+    <section class="profile-location" aria-labelledby="profile-location-title">
+      <h3 id="profile-location-title">City & local time <span aria-hidden="true">(</span><button class="profile-location-credit" id="location-credit-open" type="button" aria-label="Credit for city lookup">credit</button><span aria-hidden="true">)</span></h3>
+      <p class="profile-location-current" id="profile-location-current"></p>
+      <p class="profile-location-note">Your browser shares an approximate point with OpenStreetMap for this lookup. Only the city and time zone are saved.</p>
+      <div class="profile-location-actions">
+        <button id="location-update" type="button">Update my city</button>
+        <button id="location-clear" type="button">Use default city</button>
+      </div>
+      <p class="profile-location-status" id="location-status" role="status" aria-live="polite"></p>
+    </section>
     <p>Change the sentence only you know.</p>
     <form class="profile-form" id="profile-form">
       <label for="current-sentence">Your current sentence</label>
@@ -488,9 +552,25 @@
   </div>
 </dialog>
 
+<dialog id="location-credit-dialog" aria-labelledby="location-credit-title">
+  <div class="location-credit-inner">
+    <div class="location-credit-heading">
+      <h2 id="location-credit-title">A little map credit</h2>
+      <button class="letter-close" id="location-credit-close" type="button" aria-label="Close attribution">×</button>
+    </div>
+    <p class="location-credit-copy">Thanks to OpenStreetMap for helping us find the city name.</p>
+    <a class="location-credit-link" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors and copyright</a>
+  </div>
+</dialog>
+
 <script>
   let currentUser = null;
   let signedInPerson = null;
+  const defaultProfileLocations = {
+    aditya:{city:'Delhi',time_zone:'Asia/Kolkata'},
+    tishu:{city:'Sydney',time_zone:'Australia/Sydney'}
+  };
+  let profileLocations = structuredClone(defaultProfileLocations);
   let chatSocket = null;
   let chatSocketGeneration = 0;
   let callIceServers = [{urls:'stun:stun.l.google.com:19302'}];
@@ -522,7 +602,7 @@
   let postcardPreviewUrl = null;
   const heroCopyOptions = [
     {title:'A random hello turned into our favourite part of the day.', subtitle:'One message became a hundred little updates, and somehow that still feels like a good plot twist.'},
-    {title:'Different clocks, same “tell you later” that never waits.', subtitle:'Delhi and Sydney keep different hours. We still find a moment that feels like ours.'},
+    {title:'Different clocks, same “tell you later” that never waits.', subtitle:'Our cities keep different hours. We still find a moment that feels like ours.'},
     {title:'Two cities apart. Still each other’s first update.', subtitle:'The big news, the tiny details, and all the things that are better when shared.'},
     {title:'It started by chance. We kept choosing to stay.', subtitle:'No grand plan, just two people who kept finding one more thing to talk about.'},
     {title:'A little corner for all the “you won’t believe this” moments.', subtitle:'Life keeps happening in two time zones. This is where we catch each other up.'},
@@ -552,15 +632,121 @@
   }
   function tick(){
     const now = new Date();
-    const d = formatParts(now,'Asia/Kolkata'), s = formatParts(now,'Australia/Sydney');
-    document.getElementById('time-delhi').textContent = d.time;
-    document.getElementById('date-delhi').textContent = d.dateStr;
-    document.getElementById('time-sydney').textContent = s.time;
-    document.getElementById('date-sydney').textContent = s.dateStr;
-    const diff = tzOffsetMinutes(now,'Australia/Sydney') - tzOffsetMinutes(now,'Asia/Kolkata');
+    const adityaLocation = profileLocations.aditya;
+    const tishuLocation = profileLocations.tishu;
+    const adityaTime = formatParts(now, adityaLocation.time_zone);
+    const tishuTime = formatParts(now, tishuLocation.time_zone);
+    document.getElementById('city-aditya').textContent = adityaLocation.city;
+    document.getElementById('city-tishu').textContent = tishuLocation.city;
+    document.getElementById('time-aditya').textContent = adityaTime.time;
+    document.getElementById('date-aditya').textContent = adityaTime.dateStr;
+    document.getElementById('time-tishu').textContent = tishuTime.time;
+    document.getElementById('date-tishu').textContent = tishuTime.dateStr;
+    const diff = tzOffsetMinutes(now,tishuLocation.time_zone) - tzOffsetMinutes(now,adityaLocation.time_zone);
     const h = Math.floor(Math.abs(diff)/60), m = Math.abs(diff)%60;
-    document.getElementById('gap-text').textContent = m ? `${h}h ${m}m` : `${h}h`;
+    const difference = m ? `${h}h ${m}m` : `${h}h`;
+    document.getElementById('gap-text').textContent = diff === 0
+      ? 'Both cities share the same local time.'
+      : diff > 0 ? `Tishu is ${difference} ahead of Aditya.` : `Aditya is ${difference} ahead of Tishu.`;
   }
+
+  function applyProfileLocation(person, location){
+    if(!defaultProfileLocations[person] || typeof location?.city !== 'string' || typeof location?.time_zone !== 'string') return;
+    profileLocations[person] = {
+      city:location.city,
+      time_zone:location.time_zone,
+      updated_at:location.updated_at || null
+    };
+    tick();
+    if(person === signedInPerson) updateProfileLocationSummary();
+  }
+
+  function updateProfileLocationSummary(){
+    if(!signedInPerson) return;
+    const location = profileLocations[signedInPerson];
+    document.getElementById('profile-location-current').textContent = `${location.city} · ${location.time_zone}`;
+  }
+
+  function setLocationStatus(message, isError=false){
+    const status = document.getElementById('location-status');
+    status.textContent = message;
+    status.classList.toggle('error', isError);
+  }
+
+  async function loadProfileLocations(){
+    try{
+      const response = await fetch('/api/locations', {cache:'no-store'});
+      if(!response.ok) throw new Error('Saved cities could not be loaded.');
+      const result = await response.json();
+      profileLocations = {...defaultProfileLocations, ...(result.locations || {})};
+      tick();
+      updateProfileLocationSummary();
+    }catch(err){
+      setLocationStatus(err.message || 'Saved cities could not be loaded.', true);
+    }
+  }
+
+  function requestCurrentPosition(){
+    return new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{
+      enableHighAccuracy:false,
+      maximumAge:5*60*1000,
+      timeout:15000
+    }));
+  }
+
+  async function updateMyCity(){
+    const button = document.getElementById('location-update');
+    if(!navigator.geolocation){
+      setLocationStatus('Location permission is not available in this browser.', true);
+      return;
+    }
+    button.disabled = true;
+    setLocationStatus('Waiting for location permission…');
+    try{
+      const position = await requestCurrentPosition();
+      setLocationStatus('Finding your city…');
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || profileLocations[signedInPerson].time_zone;
+      const response = await fetch('/api/location', {
+        method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          latitude:Number(position.coords.latitude.toFixed(3)),
+          longitude:Number(position.coords.longitude.toFixed(3)),
+          time_zone:timeZone
+        })
+      });
+      const result = await response.json();
+      if(!response.ok) throw new Error(result.detail || 'Your city could not be updated.');
+      applyProfileLocation(result.person, result.location);
+      setLocationStatus(`Your city is now ${result.location.city}.`);
+    }catch(err){
+      const message = err.code === 1 ? 'Location permission was not granted.'
+        : err.code === 2 ? 'Your device could not determine its location.'
+          : err.code === 3 ? 'The location request timed out. Try again.'
+            : err.message || 'Your city could not be updated.';
+      setLocationStatus(message, true);
+    }finally{
+      button.disabled = false;
+    }
+  }
+
+  async function clearMyCity(){
+    const button = document.getElementById('location-clear');
+    button.disabled = true;
+    setLocationStatus('Restoring your default city…');
+    try{
+      const response = await fetch('/api/location', {method:'DELETE'});
+      const result = await response.json();
+      if(!response.ok) throw new Error(result.detail || 'Your default city could not be restored.');
+      applyProfileLocation(result.person, result.location);
+      setLocationStatus(`Showing ${result.location.city} again.`);
+    }catch(err){
+      setLocationStatus(err.message || 'Your default city could not be restored.', true);
+    }finally{
+      button.disabled = false;
+    }
+  }
+
   tick(); setInterval(tick, 15000);
 
   // ---------- Sign in and profile ----------
@@ -598,6 +784,8 @@
     document.getElementById('profile-signed-name').textContent = currentUser;
     document.getElementById('chat-who').textContent = currentUser;
     loadCallConfiguration();
+    loadProfileLocations();
+    loadCallHistory();
     fetch('/api/messages').then(response=>{
       if(!response.ok) throw new Error('Messages could not be loaded');
       return response.json();
@@ -612,11 +800,11 @@
 
   function tishuWelcome(){
     const hour = Number(new Intl.DateTimeFormat('en-AU', {
-      timeZone:'Australia/Sydney', hour:'2-digit', hourCycle:'h23'
+      timeZone:profileLocations.tishu.time_zone, hour:'2-digit', hourCycle:'h23'
     }).format(new Date()));
     const periods = [
-      {until:12, label:'GOOD MORNING IN SYDNEY', lines:[
-        "Morning, cutie. Delhi's already rooting for you.",
+      {until:12, label:'GOOD MORNING, TISHU', lines:[
+        "Morning, cutie. I'm already rooting for you.",
         'Good morning, sleepyhead. May today be extra kind to you.',
         'Hey, sunshine. You make even the early hours look lovely.',
         'Up and at it, little star. Go make the day jealous.'
@@ -627,16 +815,16 @@
         'Hi, favorite distraction. Please drink some water for me.',
         'Hello, darling. Hope the day is being gentle with you.'
       ]},
-      {until:21, label:'EVENING, SYDNEY', lines:[
+      {until:21, label:'A LITTLE EVENING HELLO', lines:[
         'Hey, gorgeous. You made it through another day.',
         'Evening, cutie. Tell me the most dramatic part of today.',
         "Look who's still the best part of my day.",
         'Good evening, little star. Save one tiny moment for us.'
       ]},
-      {until:24, label:'A SOFT GOODNIGHT FROM DELHI', lines:[
-        'Goodnight, cutie. Sydney can borrow you back tomorrow.',
+      {until:24, label:'A SOFT GOODNIGHT', lines:[
+        'Goodnight, cutie. I will be here when morning comes.',
         'Long day, little star? Come rest those dramatic thoughts.',
-        'Sleep well, favorite person. Delhi is sending a soft hug.',
+        'Sleep well, favorite person. Sending you a soft hug.',
         'Okay, sleepyhead. Tomorrow can wait a minute. You are home.'
       ]}
     ];
@@ -735,9 +923,15 @@
   document.getElementById('profile-open').addEventListener('click', ()=>{
     document.getElementById('profile-error').textContent = '';
     document.getElementById('display-name-error').textContent = '';
+    setLocationStatus('');
+    updateProfileLocationSummary();
     document.getElementById('display-name').value = currentUser;
     profileDialog.showModal();
   });
+  document.getElementById('location-update').addEventListener('click', updateMyCity);
+  document.getElementById('location-clear').addEventListener('click', clearMyCity);
+  document.getElementById('location-credit-open').addEventListener('click', ()=>document.getElementById('location-credit-dialog').showModal());
+  document.getElementById('location-credit-close').addEventListener('click', ()=>document.getElementById('location-credit-dialog').close());
   document.getElementById('profile-close').addEventListener('click', ()=>profileDialog.close());
   document.getElementById('display-name-form').addEventListener('submit', async event=>{
     event.preventDefault();
@@ -1853,6 +2047,73 @@
     updateCallAvailability();
   }
 
+  function formatCallDuration(seconds){
+    const totalSeconds = Math.max(0, Number(seconds) || 0);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+    return hours
+      ? `${hours}:${String(minutes).padStart(2,'0')}:${String(remainingSeconds).padStart(2,'0')}`
+      : `${minutes}:${String(remainingSeconds).padStart(2,'0')}`;
+  }
+
+  function renderCallHistory(calls){
+    const list = document.getElementById('call-history-list');
+    const status = document.getElementById('call-history-status');
+    list.replaceChildren();
+    if(!calls.length){
+      status.classList.remove('error');
+      status.textContent = 'No calls yet.';
+      return;
+    }
+    status.classList.remove('error');
+    status.textContent = '';
+    const statusLabels = {
+      ringing:'Ringing', connecting:'Connecting', connected:'In progress', completed:'Completed',
+      missed:'Missed', declined:'Declined', busy:'Busy', cancelled:'Cancelled', failed:'Failed',
+      dropped:'Dropped'
+    };
+    calls.forEach(call=>{
+      const item = document.createElement('li');
+      item.className = 'call-history-entry';
+      const copy = document.createElement('span');
+      const route = document.createElement('strong');
+      route.className = 'call-history-route';
+      route.textContent = `${call.caller_name} → ${call.recipient_name}`;
+      const detail = document.createElement('span');
+      detail.className = 'call-history-detail';
+      const date = new Date(call.created_at);
+      const dateLabel = Number.isNaN(date.getTime()) ? '' : date.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+      detail.textContent = `${call.mode === 'video' ? 'Video' : 'Audio'}${dateLabel ? ` · ${dateLabel}` : ''}`;
+      copy.append(route, detail);
+      const outcome = document.createElement('span');
+      outcome.className = `call-history-outcome ${call.status}`;
+      const outcomeLabel = document.createElement('span');
+      outcomeLabel.textContent = statusLabels[call.status] || 'Ended';
+      outcome.appendChild(outcomeLabel);
+      if(call.duration_seconds > 0){
+        const duration = document.createElement('span');
+        duration.className = 'call-history-duration';
+        duration.textContent = formatCallDuration(call.duration_seconds);
+        outcome.appendChild(duration);
+      }
+      item.append(copy, outcome);
+      list.appendChild(item);
+    });
+  }
+
+  async function loadCallHistory(){
+    const status = document.getElementById('call-history-status');
+    try{
+      const response = await fetch('/api/calls', {cache:'no-store'});
+      if(!response.ok) throw new Error('Call history could not be loaded.');
+      renderCallHistory(await response.json());
+    }catch(err){
+      status.classList.add('error');
+      status.textContent = err.message || 'Call history could not be loaded.';
+    }
+  }
+
   function updateCallDialog(){
     if(!activeCall) return;
     const incoming = activeCall.direction === 'incoming' && activeCall.state === 'incoming';
@@ -1935,7 +2196,8 @@
       const action = activeCall.direction === 'incoming' && activeCall.state === 'incoming'
         ? 'decline'
         : activeCall.state === 'ringing' || activeCall.state === 'permission' ? 'cancel' : 'hangup';
-      emitCallSignal(action);
+      const reason = action === 'hangup' ? 'user_hangup' : 'user_cancel';
+      emitCallSignal(action, {reason});
     }
     finishCall('Call ended.');
   }
@@ -1968,6 +2230,7 @@
       if(connection.connectionState === 'connected'){
         clearTimeout(callRingTimer);
         callRingTimer = null;
+        emitCallSignal('connected', {}, call);
         activeCall.state = 'active';
         callConnectedAt = Date.now();
         const updateDuration = ()=>{
@@ -1981,7 +2244,7 @@
         callDurationTimer = setInterval(updateDuration, 1000);
         updateCallDialog();
       }else if(connection.connectionState === 'failed'){
-        emitCallSignal('hangup', {}, call);
+        emitCallSignal('hangup', {reason:'connection_lost'}, call);
         finishCall('Could not connect. Check network access or configure TURN.');
       }else if(connection.connectionState === 'disconnected'){
         activeCall.status = 'Connection interrupted…';
@@ -2029,7 +2292,7 @@
       }
       callRingTimer = setTimeout(()=>{
         if(activeCall?.id !== call.id) return;
-        emitCallSignal('cancel', {}, call);
+        emitCallSignal('cancel', {reason:'no_answer'}, call);
         finishCall('No answer. You can try again later.', true);
       }, 45000);
     }catch(err){
@@ -2164,6 +2427,13 @@
     event.preventDefault();
     endCurrentCall();
   });
+  document.getElementById('call-history-open').addEventListener('click', ()=>{
+    const dialog = document.getElementById('call-history-dialog');
+    if(!dialog.open) dialog.showModal();
+    loadCallHistory();
+  });
+  document.getElementById('call-history-close').addEventListener('click', ()=>document.getElementById('call-history-dialog').close());
+  document.getElementById('call-history-refresh').addEventListener('click', loadCallHistory);
 
   // ---------- Shared REST + WebSocket connection ----------
   function connectChat(){
@@ -2187,6 +2457,7 @@
         setCallAvailability(payload.message || 'Call signaling failed.');
         if(activeCall){ activeCall.status = payload.message || 'Call signaling failed.'; updateCallDialog(); }
       }
+      if(payload.type === 'call_history_changed') loadCallHistory();
       if(payload.type === 'history') renderMessages(payload.messages || []);
       if(payload.type === 'message'){
         const duplicate = payload.message.client_id && lastMessages.some(message=>String(message.client_id) === String(payload.message.client_id));
@@ -2203,6 +2474,7 @@
         if(activeDeleteMessageId === String(payload.message_id) && messageDeleteDialog.open) messageDeleteDialog.close();
       }
       if(payload.type === 'profile_updated') applyDisplayName(payload.person, payload.name);
+      if(payload.type === 'location_updated') applyProfileLocation(payload.person, payload.location);
       if(payload.type === 'postcard_created'){
         if(payload.recipient === signedInPerson){
           loadPostcards().then(()=>showPostcardNotice(payload.id));

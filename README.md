@@ -32,6 +32,12 @@ The app includes a public STUN server, which is enough for many networks but not
 
 WebSocket connections are held in the web process's memory, so run one web instance unless shared signaling/pub-sub is added for multiple instances.
 
+Use **Call history** beside the audio/video call buttons to open the scrollable history dialog. It shows the latest 50 calls to both participants, including caller, recipient, mode, time, outcome, and duration. The app stores call metadata only; it does not record media.
+
+## Profile locations
+
+Open **My little corner** and choose **Update my city** to grant the browser one-time location access. The browser rounds coordinates to three decimal places; the app sends that approximate point to OpenStreetMap Nominatim to resolve a locality and stores only the returned city name and the browser's IANA time zone. Coordinates are not stored, location is not requested on sign-in, and there is no background tracking. Choose **Use default city** to clear the saved locality. Location access requires HTTPS in production (localhost is allowed for development); the profile UI links to OpenStreetMap attribution.
+
 ### Database and storage
 
 The Render Blueprint provisions a paid Postgres database and injects its private connection URL as `DATABASE_URL`. The web service can remain on its free plan; database charges are separate. Render's free Postgres databases expire after 30 days and do not include backups, so this Blueprint does not use the free database plan. Local SQLite data is not automatically migrated when changing databases. Back up any existing production data before syncing a database change.

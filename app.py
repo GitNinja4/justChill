@@ -7,12 +7,16 @@ import os
 import secrets
 import sqlite3
 import time
+import urllib.error
+import urllib.request
 import uuid
 import zipfile
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +31,10 @@ DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(BASE_DIR / "data" / "relatio
 DATABASE_URL = os.getenv("DATABASE_URL")
 VALID_PEOPLE = {"aditya", "tishu"}
 PEOPLE = {"aditya": "Aditya", "tishu": "Tishu"}
+DEFAULT_LOCATIONS = {
+    "aditya": {"city": "Delhi", "time_zone": "Asia/Kolkata"},
+    "tishu": {"city": "Sydney", "time_zone": "Australia/Sydney"},
+}
 SESSION_COOKIE = "aditya_tishu_session"
 SESSION_SECONDS = 60 * 60 * 24 * 30
 PASSWORD_ROUNDS = 310_000
@@ -40,9 +48,11 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 CALL_SIGNAL_ACTIONS = {
-    "invite", "accept", "decline", "busy", "cancel", "offer", "answer", "ice", "hangup"
+    "invite", "accept", "decline", "busy", "cancel", "offer", "answer", "ice", "connected", "hangup"
 }
 MAX_CALL_SIGNAL_BYTES = 128 * 1024
+geocode_lock = asyncio.Lock()
+last_geocode_request_at = 0.0
 
 
 class DatabaseConnection:
@@ -138,6 +148,12 @@ def initialize_db():
                 display_name TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )""",
+            """CREATE TABLE IF NOT EXISTS profile_locations (
+                person TEXT PRIMARY KEY,
+                city TEXT NOT NULL,
+                time_zone TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""",
             f"""CREATE TABLE IF NOT EXISTS postcards (
                 id {message_id_type},
                 sender_id TEXT NOT NULL,
@@ -157,6 +173,17 @@ def initialize_db():
                 data {'BYTEA' if DATABASE_URL else 'BLOB'} NOT NULL,
                 created_at TEXT NOT NULL
             )""",
+            """CREATE TABLE IF NOT EXISTS call_history (
+                call_id TEXT PRIMARY KEY,
+                caller_id TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                connected_at TEXT,
+                ended_at TEXT,
+                duration_seconds INTEGER NOT NULL DEFAULT 0
+            )""",
             """CREATE TABLE IF NOT EXISTS hidden_messages (
                 message_id BIGINT NOT NULL,
                 person TEXT NOT NULL,
@@ -166,6 +193,7 @@ def initialize_db():
             "CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at)",
             "CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions (message_id)",
             "CREATE INDEX IF NOT EXISTS idx_postcards_recipient_reveal ON postcards (recipient_id, reveal_at)",
+            "CREATE INDEX IF NOT EXISTS idx_call_history_created_at ON call_history (created_at)",
         )
         for statement in statements:
             connection.execute(statement)
@@ -278,6 +306,12 @@ class SettingRequest(BaseModel):
 
 class DisplayNameRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=40)
+
+
+class LocationUpdateRequest(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    time_zone: str = Field(min_length=1, max_length=100)
 
 
 class PostcardRequest(BaseModel):
@@ -469,6 +503,171 @@ async def get_call_config(request: Request):
             "credential": turn_credential,
         })
     return {"ice_servers": ice_servers}
+
+
+def reverse_geocode_city(latitude: float, longitude: float):
+    query = urlencode({
+        "format": "jsonv2",
+        "addressdetails": 1,
+        "zoom": 14,
+        "lat": latitude,
+        "lon": longitude,
+    })
+    geocode_request = urllib.request.Request(
+        f"https://nominatim.openstreetmap.org/reverse?{query}",
+        headers={
+            "User-Agent": "AdityaAndTishu/1.0 (https://aditya-and-tishu.onrender.com)",
+            "Accept-Language": "en",
+        },
+    )
+    try:
+        with urllib.request.urlopen(geocode_request, timeout=8) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            raise HTTPException(status_code=503, detail="City lookup is busy. Please try again in a moment.") from error
+        raise HTTPException(status_code=503, detail="City lookup is temporarily unavailable.") from error
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        raise HTTPException(status_code=503, detail="City lookup is temporarily unavailable.") from error
+    address = result.get("address") if isinstance(result, dict) else None
+    if not isinstance(address, dict):
+        raise HTTPException(status_code=422, detail="A city name could not be found for this location.")
+    city = next((address.get(field) for field in (
+        "city", "town", "village", "municipality", "suburb", "hamlet", "locality", "county"
+    ) if isinstance(address.get(field), str) and address[field].strip()), None)
+    if not city:
+        raise HTTPException(status_code=422, detail="A city name could not be found for this location.")
+    return city.strip()[:80]
+
+
+async def lookup_approximate_city(latitude: float, longitude: float):
+    global last_geocode_request_at
+    async with geocode_lock:
+        wait_seconds = max(0, 1.1 - (time.monotonic() - last_geocode_request_at))
+        if wait_seconds:
+            await asyncio.sleep(wait_seconds)
+        last_geocode_request_at = time.monotonic()
+        return await asyncio.to_thread(reverse_geocode_city, round(latitude, 3), round(longitude, 3))
+
+
+@app.get("/api/locations")
+async def get_profile_locations(request: Request):
+    authenticated_person(request)
+    locations = {person: dict(location) for person, location in DEFAULT_LOCATIONS.items()}
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT person, city, time_zone, updated_at FROM profile_locations"
+        ).fetchall()
+    for row in rows:
+        locations[row["person"]] = {
+            "city": row["city"],
+            "time_zone": row["time_zone"],
+            "updated_at": row["updated_at"],
+        }
+    return {"locations": locations}
+
+
+@app.put("/api/location")
+async def update_profile_location(payload: LocationUpdateRequest, request: Request):
+    person = authenticated_person(request)
+    try:
+        ZoneInfo(payload.time_zone)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=422, detail="That device time zone is not recognized.") from error
+    city = await lookup_approximate_city(payload.latitude, payload.longitude)
+    updated_at = datetime.now(timezone.utc).isoformat()
+    with database() as connection:
+        connection.execute(
+            "INSERT INTO profile_locations (person, city, time_zone, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (person) DO UPDATE SET city = excluded.city, time_zone = excluded.time_zone, updated_at = excluded.updated_at",
+            (person, city, payload.time_zone, updated_at),
+        )
+    location = {"city": city, "time_zone": payload.time_zone, "updated_at": updated_at}
+    await broadcast({"type": "location_updated", "person": person, "location": location})
+    return {"person": person, "location": location}
+
+
+@app.delete("/api/location")
+async def clear_profile_location(request: Request):
+    person = authenticated_person(request)
+    with database() as connection:
+        connection.execute("DELETE FROM profile_locations WHERE person = ?", (person,))
+    location = dict(DEFAULT_LOCATIONS[person])
+    await broadcast({"type": "location_updated", "person": person, "location": location})
+    return {"person": person, "location": location}
+
+
+@app.get("/api/calls")
+async def get_call_history(request: Request):
+    person = authenticated_person(request)
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT call_id, caller_id, recipient_id, mode, status, created_at, connected_at, ended_at, duration_seconds "
+            "FROM call_history WHERE caller_id = ? OR recipient_id = ? "
+            "ORDER BY created_at DESC LIMIT 50",
+            (person, person),
+        ).fetchall()
+        calls = [{
+            "call_id": row["call_id"],
+            "caller_id": row["caller_id"],
+            "caller_name": profile_name(connection, row["caller_id"]),
+            "recipient_id": row["recipient_id"],
+            "recipient_name": profile_name(connection, row["recipient_id"]),
+            "mode": row["mode"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "connected_at": row["connected_at"],
+            "ended_at": row["ended_at"],
+            "duration_seconds": row["duration_seconds"],
+        } for row in rows]
+    return calls
+
+
+def create_call_history(call_id: str, caller_id: str, recipient_id: str, mode: str):
+    created_at = datetime.now(timezone.utc).isoformat()
+    with database() as connection:
+        connection.execute(
+            "INSERT INTO call_history (call_id, caller_id, recipient_id, mode, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (call_id) DO NOTHING",
+            (call_id, caller_id, recipient_id, mode, "ringing", created_at),
+        )
+
+
+def update_call_history(call_id: str, status: str):
+    now = datetime.now(timezone.utc)
+    with database() as connection:
+        row = connection.execute(
+            "SELECT status, connected_at, ended_at FROM call_history WHERE call_id = ?",
+            (call_id,),
+        ).fetchone()
+        if not row or row["ended_at"]:
+            return
+        if status == "connected":
+            connection.execute(
+                "UPDATE call_history SET status = ?, connected_at = COALESCE(connected_at, ?) WHERE call_id = ?",
+                (status, now.isoformat(), call_id),
+            )
+            return
+        if status == "connecting":
+            connection.execute("UPDATE call_history SET status = ? WHERE call_id = ?", (status, call_id))
+            return
+        if status == "hangup":
+            status = "completed" if row["connected_at"] else "failed"
+        elif status == "connection_lost":
+            status = "dropped" if row["connected_at"] else "failed"
+        elif status == "disconnect":
+            status = "dropped" if row["connected_at"] else "failed" if row["status"] == "connecting" else "missed"
+        duration = 0
+        if row["connected_at"]:
+            try:
+                connected_at = datetime.fromisoformat(row["connected_at"])
+                duration = max(0, int((now - connected_at).total_seconds()))
+            except (TypeError, ValueError):
+                duration = 0
+        connection.execute(
+            "UPDATE call_history SET status = ?, ended_at = ?, duration_seconds = ? WHERE call_id = ?",
+            (status, now.isoformat(), duration, call_id),
+        )
 
 
 @app.get("/api/auth/session")
@@ -980,8 +1179,12 @@ async def relay_call_signal(websocket: WebSocket, person: str, payload: dict):
         if call_id in active_call_routes:
             await websocket.send_json({"type": "call_error", "message": "That call is already in progress."})
             return
+        create_call_history(call_id, person, target, data["mode"])
+        await broadcast({"type": "call_history_changed"})
         recipients = tuple(connected_clients_by_person[target])
         if not recipients:
+            update_call_history(call_id, "missed")
+            await broadcast({"type": "call_history_changed"})
             await websocket.send_json({"type": "call_signal", "action": "unavailable", "call_id": call_id, "sender": target, "data": {}})
             return
         recipient = recipients[0]
@@ -1000,8 +1203,32 @@ async def relay_call_signal(websocket: WebSocket, person: str, payload: dict):
         connected_clients_by_person[target].discard(recipient)
         active_call_routes.pop(call_id, None)
         if action == "invite":
+            update_call_history(call_id, "missed")
+            await broadcast({"type": "call_history_changed"})
             await websocket.send_json({"type": "call_signal", "action": "unavailable", "call_id": call_id, "sender": target, "data": {}})
         return
+    if action == "accept":
+        update_call_history(call_id, "connecting")
+        await broadcast({"type": "call_history_changed"})
+    elif action == "connected":
+        update_call_history(call_id, "connected")
+        await broadcast({"type": "call_history_changed"})
+    elif action == "busy":
+        update_call_history(call_id, "busy")
+        await broadcast({"type": "call_history_changed"})
+    elif action == "decline":
+        reason = data.get("reason")
+        status = "missed" if reason == "no_answer" else "failed" if reason == "media_unavailable" else "declined"
+        update_call_history(call_id, status)
+        await broadcast({"type": "call_history_changed"})
+    elif action == "cancel":
+        status = "missed" if data.get("reason") == "no_answer" else "cancelled"
+        update_call_history(call_id, status)
+        await broadcast({"type": "call_history_changed"})
+    elif action == "hangup":
+        status = "connection_lost" if data.get("reason") == "connection_lost" else "hangup"
+        update_call_history(call_id, status)
+        await broadcast({"type": "call_history_changed"})
     if action in {"busy", "decline", "cancel", "hangup"}:
         active_call_routes.pop(call_id, None)
 
@@ -1011,6 +1238,8 @@ async def notify_call_peer_disconnect(websocket: WebSocket, person: str):
         if route.get(person) is not websocket:
             continue
         active_call_routes.pop(call_id, None)
+        update_call_history(call_id, "disconnect")
+        await broadcast({"type": "call_history_changed"})
         peer_person = "tishu" if person == "aditya" else "aditya"
         peer = route.get(peer_person)
         if not peer:
