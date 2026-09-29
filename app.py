@@ -442,7 +442,7 @@ def reverse_geocode_geoapify(latitude: float, longitude: float, api_key: str):
     geocode_request = urllib.request.Request(
         f"https://api.geoapify.com/v1/geocode/reverse?{query}",
         headers={
-            "User-Agent": "AdityaAndTishu/1.0 (https://aditya-and-tishu.onrender.com)",
+            "User-Agent": "TakeItEasy/1.0 (https://takeiteasy.onrender.com)",
             "Accept": "application/geo+json",
         },
     )
@@ -475,7 +475,7 @@ def reverse_geocode_nominatim(latitude: float, longitude: float):
     geocode_request = urllib.request.Request(
         f"https://nominatim.openstreetmap.org/reverse?{query}",
         headers={
-            "User-Agent": "AdityaAndTishu/1.0 (https://aditya-and-tishu.onrender.com)",
+            "User-Agent": "TakeItEasy/1.0 (https://takeiteasy.onrender.com)",
             "Accept-Language": "en",
         },
     )
