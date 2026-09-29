@@ -45,7 +45,25 @@
   h2.section{font-family:'Fraunces',serif; font-weight:400; font-size:19px; margin:0 0 14px; color:var(--cream);}
 
   .chat{background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:18px; padding:20px 18px; margin-bottom:24px;}
-  .chat-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;}
+  .chat-head{display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:12px;}
+  .ai-open{flex:none; margin-left:auto; border:1px solid rgba(239,184,84,.35); border-radius:8px; padding:7px 10px; background:rgba(239,184,84,.1); color:var(--gold); font:600 11px 'Inter',sans-serif; cursor:pointer;}
+  .ai-open:hover,.ai-open:focus-visible{background:rgba(239,184,84,.18);}
+  #ai-dialog{max-height:min(88dvh,700px); overflow:auto; background:#211747;}
+  .ai-inner{padding:24px;}
+  .ai-header{display:flex; align-items:flex-start; justify-content:space-between; gap:12px;}
+  .ai-header h2{font:600 23px/1.2 'Fraunces',serif; margin:0;}
+  .ai-close{flex:none; width:34px; height:34px; border:1px solid rgba(255,255,255,.14); border-radius:50%; background:transparent; color:var(--cream); font:22px 'Inter',sans-serif; cursor:pointer;}
+  .ai-copy{color:var(--dim); font-size:13px; line-height:1.5; margin:10px 0 14px;}
+  .ai-privacy{border-left:2px solid var(--gold); padding:9px 10px; background:rgba(239,184,84,.08); color:var(--dim); font-size:11px; line-height:1.5; margin:0 0 16px;}
+  .ai-form label{display:block; color:var(--cream); font-size:12px; margin:0 0 7px;}
+  .ai-form textarea{display:block; width:100%; min-height:92px; resize:vertical; border:1px solid rgba(255,255,255,.14); border-radius:9px; padding:11px; background:rgba(255,255,255,.06); color:var(--cream); font:13px/1.5 'Inter',sans-serif;}
+  .ai-form textarea:focus-visible{outline:2px solid var(--gold); outline-offset:2px;}
+  .ai-result{margin-top:14px;}
+  .ai-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;}
+  .ai-button{min-height:40px; border:1px solid rgba(255,255,255,.16); border-radius:8px; padding:9px 12px; background:rgba(255,255,255,.06); color:var(--cream); font:600 12px 'Inter',sans-serif; cursor:pointer;}
+  .ai-button.primary{background:var(--gold); border-color:var(--gold); color:var(--sky1);}
+  .ai-button:disabled{opacity:.55; cursor:wait;}
+  .ai-status{min-height:16px; color:#ff9d8f; font-size:12px; margin:9px 0 0;}
   .whoami{display:flex; gap:6px;}
   .whoami button{background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:var(--dim); border-radius:100px; font-size:12px; padding:5px 12px; cursor:pointer;}
   .whoami button.active{background:var(--gold); color:var(--sky1); border-color:var(--gold); font-weight:600;}
@@ -271,6 +289,7 @@
     <div class="chat-head">
       <span class="note" style="margin:0;">Talking as</span>
       <span class="chat-who" id="chat-who"></span>
+      <button class="ai-open" id="ai-open" type="button">Ask AI</button>
     </div>
     <div class="msgs" id="msgs"></div>
     <div class="chat-in">
@@ -290,6 +309,37 @@
 
   <footer>matched by chance, staying by choice</footer>
 </main>
+
+<dialog id="ai-dialog" aria-labelledby="ai-title" aria-describedby="ai-description">
+  <div class="ai-inner">
+    <div class="ai-header">
+      <div>
+        <p class="letter-kicker">A LITTLE HELP FINDING THE WORDS</p>
+        <h2 id="ai-title">Draft with Gemini</h2>
+      </div>
+      <button class="ai-close" id="ai-close" type="button" aria-label="Close Ask AI">×</button>
+    </div>
+    <p class="ai-copy" id="ai-description">Tell Gemini what you want help saying. It will make a draft for you to edit; it never sends anything on your behalf.</p>
+    <p class="ai-privacy">Only the prompt you type below is sent to Google Gemini. Your chat history is not included. On Gemini's free tier, Google may use submitted prompts to improve its products; avoid including anything private.</p>
+    <form class="ai-form" id="ai-form">
+      <label for="ai-prompt">What would you like help replying to?</label>
+      <textarea id="ai-prompt" maxlength="1000" placeholder="For example: Help me write a warm reply saying I miss her and hope her day went well."></textarea>
+      <div class="ai-actions">
+        <button class="ai-button primary" id="ai-generate" type="submit">Draft reply</button>
+        <button class="ai-button" id="ai-cancel" type="button">Cancel</button>
+      </div>
+      <p class="ai-status" id="ai-status" role="status"></p>
+      <div class="ai-result" id="ai-result" hidden>
+        <label for="ai-draft">Your editable draft</label>
+        <textarea id="ai-draft" maxlength="300"></textarea>
+        <div class="ai-actions">
+          <button class="ai-button primary" id="ai-use-draft" type="button">Use draft in chat</button>
+          <button class="ai-button" id="ai-redraft" type="button">Try another</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</dialog>
 
 <dialog id="postcard-dialog" aria-labelledby="letter-title">
   <div class="flower-shower" id="flower-shower" aria-hidden="true" hidden></div>
@@ -421,6 +471,7 @@
   let pendingChatFiles = [];
   let pendingPostcardFile = null;
   let postcardPreviewUrl = null;
+  let geminiEnabled = false;
   const heroCopyOptions = [
     {title:'A random hello turned into our favourite part of the day.', subtitle:'One message became a hundred little updates, and somehow that still feels like a good plot twist.'},
     {title:'Different clocks, same “tell you later” that never waits.', subtitle:'Delhi and Sydney keep different hours. We still find a moment that feels like ours.'},
@@ -484,8 +535,19 @@
     button.removeAttribute('title');
   }
 
+  async function loadGeminiHeroQuote(){
+    try{
+      const response = await fetch('/api/ai/hero-quote');
+      if(!response.ok) return;
+      const result = await response.json();
+      if(result.quote) document.getElementById('hero-subtitle').textContent = result.quote;
+    }catch(err){}
+  }
+
   fetch('/api/config').then(response=>response.json()).then(config=>{
     whatsappNumbers = config.whatsapp_numbers || {};
+    geminiEnabled = Boolean(config.gemini_enabled);
+    document.getElementById('ai-generate').disabled = !geminiEnabled;
     if(signedInPerson) updateCallButton();
   }).catch(()=>{});
 
@@ -500,6 +562,7 @@
     welcomeScreen.hidden = true;
     appScreen.hidden = false;
     rotateHeroCopy();
+    loadGeminiHeroQuote();
     document.getElementById('profile-name').textContent = currentUser;
     document.getElementById('profile-signed-name').textContent = currentUser;
     document.getElementById('chat-who').textContent = currentUser;
@@ -1087,6 +1150,51 @@
   }
   document.getElementById('msg-send').addEventListener('click', sendMessage);
   document.getElementById('msg-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });
+  const aiDialog = document.getElementById('ai-dialog');
+  const aiPrompt = document.getElementById('ai-prompt');
+  const aiDraft = document.getElementById('ai-draft');
+  const aiGenerateButton = document.getElementById('ai-generate');
+
+  function openAIDialog(){
+    document.getElementById('ai-status').textContent = geminiEnabled ? '' : 'Gemini is not configured on the server yet.';
+    aiGenerateButton.disabled = !geminiEnabled;
+    document.getElementById('ai-result').hidden = true;
+    if(!aiDialog.open) aiDialog.showModal();
+    aiPrompt.focus();
+  }
+
+  document.getElementById('ai-open').addEventListener('click', openAIDialog);
+  document.getElementById('ai-close').addEventListener('click', ()=>aiDialog.close());
+  document.getElementById('ai-cancel').addEventListener('click', ()=>aiDialog.close());
+  document.getElementById('ai-form').addEventListener('submit', async event=>{
+    event.preventDefault();
+    const prompt = aiPrompt.value.trim();
+    const status = document.getElementById('ai-status');
+    if(!prompt){ status.textContent = 'Tell Gemini what kind of reply you need.'; return; }
+    aiGenerateButton.disabled = true;
+    status.textContent = 'Drafting a reply…';
+    document.getElementById('ai-result').hidden = true;
+    try{
+      const response = await fetch('/api/ai/reply', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})
+      });
+      const result = await response.json();
+      if(!response.ok) throw new Error(result.detail || 'Gemini could not draft a reply.');
+      aiDraft.value = result.draft || '';
+      document.getElementById('ai-result').hidden = !aiDraft.value;
+      status.textContent = aiDraft.value ? '' : 'Gemini returned an empty draft.';
+    }catch(err){ status.textContent = err.message || 'Gemini could not draft a reply.'; }
+    finally{ aiGenerateButton.disabled = !geminiEnabled; }
+  });
+  document.getElementById('ai-redraft').addEventListener('click', ()=>document.getElementById('ai-form').requestSubmit());
+  document.getElementById('ai-use-draft').addEventListener('click', ()=>{
+    const draft = aiDraft.value.trim();
+    if(!draft) return;
+    const messageInput = document.getElementById('msg-input');
+    messageInput.value = draft.slice(0, 300);
+    aiDialog.close();
+    messageInput.focus();
+  });
   const messagesBox = document.getElementById('msgs');
   const messageMenu = document.getElementById('message-menu');
   const messageDeleteDialog = document.getElementById('message-delete-dialog');

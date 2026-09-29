@@ -39,6 +39,9 @@ ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+ai_quote_lock = asyncio.Lock()
+ai_reply_last_request: dict[str, float] = {}
 
 
 class DatabaseConnection:
@@ -273,6 +276,10 @@ class PostcardRequest(BaseModel):
     attachments: list[str] = Field(default_factory=list, max_length=1)
 
 
+class AIReplyRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=1000)
+
+
 MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
 MAX_CHAT_ATTACHMENTS = 4
 ALLOWED_ATTACHMENT_TYPES = {
@@ -452,8 +459,111 @@ async def get_config():
         "whatsapp_numbers": {
             person: "".join(character for character in number if character.isdigit())
             for person, number in numbers.items()
-        }
+        },
+        "gemini_enabled": bool(os.getenv("GEMINI_API_KEY", "").strip()),
     }
+
+
+def generate_gemini_text(prompt: str, system_instruction: str, max_output_tokens: int):
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Gemini is not configured.")
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    interaction = client.interactions.create(
+        model=GEMINI_MODEL,
+        input=prompt,
+        system_instruction=system_instruction,
+        generation_config={"temperature": 0.85, "max_output_tokens": max_output_tokens},
+        store=False,
+    )
+    return (interaction.output_text or "").strip()
+
+
+def upsert_app_setting(connection, key: str, value: str):
+    if DATABASE_URL:
+        connection.execute(
+            "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = EXCLUDED.updated_at",
+            (key, value, datetime.now(timezone.utc).isoformat()),
+        )
+    else:
+        connection.execute(
+            "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at",
+            (key, value, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+@app.get("/api/ai/hero-quote")
+async def get_ai_hero_quote(request: Request):
+    authenticated_person(request)
+    if not os.getenv("GEMINI_API_KEY", "").strip():
+        return {"enabled": False, "quote": None}
+    today = datetime.now(timezone.utc).date().isoformat()
+    setting_key = f"gemini_hero_quote:{today}"
+    with database() as connection:
+        row = connection.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key = ?", (setting_key,)
+        ).fetchone()
+    if row:
+        return {"enabled": True, "quote": row["setting_value"], "date": today}
+
+    async with ai_quote_lock:
+        with database() as connection:
+            row = connection.execute(
+                "SELECT setting_value FROM app_settings WHERE setting_key = ?", (setting_key,)
+            ).fetchone()
+        if row:
+            return {"enabled": True, "quote": row["setting_value"], "date": today}
+        try:
+            quote_text = await asyncio.to_thread(
+                generate_gemini_text,
+                "Write one warm, natural, original greeting for a private long-distance couple's shared home page. "
+                "They live in Delhi and Sydney. Make it one short sentence, under 150 characters. Avoid clichés, "
+                "invented personal facts, emojis, hashtags, and quotation marks.",
+                "Return only a friendly, grounded greeting. Do not mention being an AI or refer to private chat history.",
+                96,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=502, detail="Today's Gemini greeting could not be generated.") from error
+        quote_text = " ".join(quote_text.replace('"', "").split()).strip()
+        if not quote_text:
+            raise HTTPException(status_code=502, detail="Today's Gemini greeting was empty.")
+        quote_text = quote_text[:180].rsplit(" ", 1)[0] if len(quote_text) > 180 else quote_text
+        with database() as connection:
+            upsert_app_setting(connection, setting_key, quote_text)
+    return {"enabled": True, "quote": quote_text, "date": today}
+
+
+@app.post("/api/ai/reply")
+async def draft_ai_reply(payload: AIReplyRequest, request: Request):
+    person = authenticated_person(request)
+    if not os.getenv("GEMINI_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="Add GEMINI_API_KEY to the server environment to enable Ask AI.")
+    prompt = payload.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Add a prompt before asking Gemini.")
+    now = time.monotonic()
+    if now - ai_reply_last_request.get(person, 0) < 4:
+        raise HTTPException(status_code=429, detail="Give Gemini a few seconds before asking again.")
+    ai_reply_last_request[person] = now
+    try:
+        draft = await asyncio.to_thread(
+            generate_gemini_text,
+            prompt,
+            "You help someone draft a warm, genuine reply to a message. Use only the prompt provided; no conversation history is available. "
+            "Write one concise, natural message in first person that the user can edit before sending. Do not impersonate the other participant, "
+            "invent shared memories, mention AI, or include quotation marks.",
+            160,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Gemini could not draft a reply right now.") from error
+    draft = " ".join(draft.replace('"', "").split()).strip()
+    if not draft:
+        raise HTTPException(status_code=502, detail="Gemini returned an empty draft.")
+    return {"draft": draft[:300]}
 
 
 @app.get("/api/auth/session")
