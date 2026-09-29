@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import io
 import json
-import logging
 import os
 import secrets
 import sqlite3
@@ -40,11 +39,6 @@ ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-ai_quote_lock = asyncio.Lock()
-logger = logging.getLogger(__name__)
-
-
 class DatabaseConnection:
     def __init__(self, connection, is_postgres: bool):
         self.connection = connection
@@ -458,106 +452,6 @@ async def get_config():
             for person, number in numbers.items()
         }
     }
-
-
-def generate_gemini_text(prompt: str, system_instruction: str, max_output_tokens: int):
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("Gemini is not configured.")
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
-    interaction = client.interactions.create(
-        model=GEMINI_MODEL,
-        input=prompt,
-        system_instruction=system_instruction,
-        generation_config={"temperature": 0.85, "max_output_tokens": max_output_tokens},
-        store=False,
-    )
-    return (interaction.output_text or "").strip()
-
-
-def upsert_app_setting(connection, key: str, value: str):
-    if DATABASE_URL:
-        connection.execute(
-            "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = EXCLUDED.updated_at",
-            (key, value, datetime.now(timezone.utc).isoformat()),
-        )
-    else:
-        connection.execute(
-            "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at",
-            (key, value, datetime.now(timezone.utc).isoformat()),
-        )
-
-
-@app.get("/api/ai/hero-quote")
-async def get_ai_hero_quote(request: Request):
-    person = authenticated_person(request)
-    if not os.getenv("GEMINI_API_KEY", "").strip():
-        return {"enabled": False, "quote": None}
-    recipient = PEOPLE[person]
-    sender_id = "aditya" if person == "tishu" else "tishu"
-    sender = PEOPLE[sender_id]
-    cities = {"aditya": "Delhi", "tishu": "Sydney"}
-    recipient_city = cities[person]
-    sender_city = cities[sender_id]
-    async with ai_quote_lock:
-        with database() as connection:
-            row = connection.execute(
-                "SELECT setting_value FROM app_settings WHERE setting_key = ?",
-                ("gemini_recent_welcome_messages",),
-            ).fetchone()
-        try:
-            recent_quotes = json.loads(row["setting_value"]) if row else []
-        except (TypeError, json.JSONDecodeError):
-            recent_quotes = []
-        if not isinstance(recent_quotes, list):
-            recent_quotes = []
-        recent_quotes = [str(item) for item in recent_quotes[-30:] if isinstance(item, str)]
-        recent_signatures = {
-            "".join(character for character in quote.casefold() if character.isalnum())
-            for quote in recent_quotes
-        }
-        attempted_quotes = []
-        quote_text = ""
-        for attempt in range(3):
-            avoid_quotes = [*recent_quotes[-12:], *attempted_quotes]
-            avoid = " Avoid repeating or closely paraphrasing these recent welcome messages: " + " | ".join(avoid_quotes) if avoid_quotes else ""
-            avoid += " Make this welcome specific and freshly worded, not a generic quote or slogan."
-            try:
-                generated = await asyncio.to_thread(
-                    generate_gemini_text,
-                    f"Write one short, affectionate, original welcome message addressed to {recipient} from {sender} for their private shared home page. "
-                    f"Help {recipient} feel appreciated and cared for. Their only known context is that {sender} is in {sender_city} and {recipient} is in {recipient_city}. "
-                    "Do not invent events, memories, personality traits, appearance, or private details. Avoid clichés, emojis, hashtags, "
-                    "and quotation marks. Return one sentence under 180 characters." + avoid,
-                    "Return only a fresh, warm, natural welcome. Never claim personal experiences or memories that were not supplied.",
-                    112,
-                )
-            except Exception as error:
-                logger.exception("Gemini welcome generation failed")
-                raise HTTPException(status_code=502, detail="Gemini could not create a welcome right now.") from error
-            generated = " ".join(generated.replace('"', "").split()).strip()
-            if not generated:
-                continue
-            generated = generated[:180].rsplit(" ", 1)[0] if len(generated) > 180 else generated
-            if recipient.casefold() not in generated.casefold():
-                attempted_quotes.append(generated)
-                continue
-            signature = "".join(character for character in generated.casefold() if character.isalnum())
-            if signature and signature not in recent_signatures:
-                quote_text = generated
-                break
-            attempted_quotes.append(generated)
-        if not quote_text:
-            raise HTTPException(status_code=502, detail="Gemini repeated a recent welcome. Please try again.")
-        recent_quotes.append(quote_text)
-        recent_quotes = recent_quotes[-30:]
-        with database() as connection:
-            upsert_app_setting(connection, "gemini_recent_welcome_messages", json.dumps(recent_quotes))
-    return {"enabled": True, "quote": quote_text}
 
 
 @app.get("/api/auth/session")
