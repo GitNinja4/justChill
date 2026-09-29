@@ -1,4 +1,5 @@
-# Aditya
+# Aditya & chill
+
 
 A private-feeling, single-page long-distance space served by FastAPI. It has live Delhi/Sydney clocks, a database-backed WebSocket chat, sentence-based sign-in for Aditya and Tishu, persistent reactions, authorized message deletion, and in-app WebRTC audio/video calls. Local development uses SQLite by default; Render uses PostgreSQL.
 
