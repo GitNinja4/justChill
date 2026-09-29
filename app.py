@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -41,7 +42,7 @@ ALLOWED_ORIGINS = [
 ]
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ai_quote_lock = asyncio.Lock()
-ai_reply_last_request: dict[str, float] = {}
+logger = logging.getLogger(__name__)
 
 
 class DatabaseConnection:
@@ -276,10 +277,6 @@ class PostcardRequest(BaseModel):
     attachments: list[str] = Field(default_factory=list, max_length=1)
 
 
-class AIReplyRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=1000)
-
-
 MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
 MAX_CHAT_ATTACHMENTS = 4
 ALLOWED_ATTACHMENT_TYPES = {
@@ -459,8 +456,7 @@ async def get_config():
         "whatsapp_numbers": {
             person: "".join(character for character in number if character.isdigit())
             for person, number in numbers.items()
-        },
-        "gemini_enabled": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        }
     }
 
 
@@ -498,72 +494,70 @@ def upsert_app_setting(connection, key: str, value: str):
 
 @app.get("/api/ai/hero-quote")
 async def get_ai_hero_quote(request: Request):
-    authenticated_person(request)
+    person = authenticated_person(request)
     if not os.getenv("GEMINI_API_KEY", "").strip():
         return {"enabled": False, "quote": None}
-    today = datetime.now(timezone.utc).date().isoformat()
-    setting_key = f"gemini_hero_quote:{today}"
-    with database() as connection:
-        row = connection.execute(
-            "SELECT setting_value FROM app_settings WHERE setting_key = ?", (setting_key,)
-        ).fetchone()
-    if row:
-        return {"enabled": True, "quote": row["setting_value"], "date": today}
-
+    recipient = PEOPLE[person]
+    sender_id = "aditya" if person == "tishu" else "tishu"
+    sender = PEOPLE[sender_id]
+    cities = {"aditya": "Delhi", "tishu": "Sydney"}
+    recipient_city = cities[person]
+    sender_city = cities[sender_id]
     async with ai_quote_lock:
         with database() as connection:
             row = connection.execute(
-                "SELECT setting_value FROM app_settings WHERE setting_key = ?", (setting_key,)
+                "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+                ("gemini_recent_welcome_messages",),
             ).fetchone()
-        if row:
-            return {"enabled": True, "quote": row["setting_value"], "date": today}
         try:
-            quote_text = await asyncio.to_thread(
-                generate_gemini_text,
-                "Write one warm, natural, original greeting for a private long-distance couple's shared home page. "
-                "They live in Delhi and Sydney. Make it one short sentence, under 150 characters. Avoid clichés, "
-                "invented personal facts, emojis, hashtags, and quotation marks.",
-                "Return only a friendly, grounded greeting. Do not mention being an AI or refer to private chat history.",
-                96,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=502, detail="Today's Gemini greeting could not be generated.") from error
-        quote_text = " ".join(quote_text.replace('"', "").split()).strip()
+            recent_quotes = json.loads(row["setting_value"]) if row else []
+        except (TypeError, json.JSONDecodeError):
+            recent_quotes = []
+        if not isinstance(recent_quotes, list):
+            recent_quotes = []
+        recent_quotes = [str(item) for item in recent_quotes[-30:] if isinstance(item, str)]
+        recent_signatures = {
+            "".join(character for character in quote.casefold() if character.isalnum())
+            for quote in recent_quotes
+        }
+        attempted_quotes = []
+        quote_text = ""
+        for attempt in range(3):
+            avoid_quotes = [*recent_quotes[-12:], *attempted_quotes]
+            avoid = " Avoid repeating or closely paraphrasing these recent welcome messages: " + " | ".join(avoid_quotes) if avoid_quotes else ""
+            avoid += " Make this welcome specific and freshly worded, not a generic quote or slogan."
+            try:
+                generated = await asyncio.to_thread(
+                    generate_gemini_text,
+                    f"Write one short, affectionate, original welcome message addressed to {recipient} from {sender} for their private shared home page. "
+                    f"Help {recipient} feel appreciated and cared for. Their only known context is that {sender} is in {sender_city} and {recipient} is in {recipient_city}. "
+                    "Do not invent events, memories, personality traits, appearance, or private details. Avoid clichés, emojis, hashtags, "
+                    "and quotation marks. Return one sentence under 180 characters." + avoid,
+                    "Return only a fresh, warm, natural welcome. Never claim personal experiences or memories that were not supplied.",
+                    112,
+                )
+            except Exception as error:
+                logger.exception("Gemini welcome generation failed")
+                raise HTTPException(status_code=502, detail="Gemini could not create a welcome right now.") from error
+            generated = " ".join(generated.replace('"', "").split()).strip()
+            if not generated:
+                continue
+            generated = generated[:180].rsplit(" ", 1)[0] if len(generated) > 180 else generated
+            if recipient.casefold() not in generated.casefold():
+                attempted_quotes.append(generated)
+                continue
+            signature = "".join(character for character in generated.casefold() if character.isalnum())
+            if signature and signature not in recent_signatures:
+                quote_text = generated
+                break
+            attempted_quotes.append(generated)
         if not quote_text:
-            raise HTTPException(status_code=502, detail="Today's Gemini greeting was empty.")
-        quote_text = quote_text[:180].rsplit(" ", 1)[0] if len(quote_text) > 180 else quote_text
+            raise HTTPException(status_code=502, detail="Gemini repeated a recent welcome. Please try again.")
+        recent_quotes.append(quote_text)
+        recent_quotes = recent_quotes[-30:]
         with database() as connection:
-            upsert_app_setting(connection, setting_key, quote_text)
-    return {"enabled": True, "quote": quote_text, "date": today}
-
-
-@app.post("/api/ai/reply")
-async def draft_ai_reply(payload: AIReplyRequest, request: Request):
-    person = authenticated_person(request)
-    if not os.getenv("GEMINI_API_KEY", "").strip():
-        raise HTTPException(status_code=503, detail="Add GEMINI_API_KEY to the server environment to enable Ask AI.")
-    prompt = payload.prompt.strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="Add a prompt before asking Gemini.")
-    now = time.monotonic()
-    if now - ai_reply_last_request.get(person, 0) < 4:
-        raise HTTPException(status_code=429, detail="Give Gemini a few seconds before asking again.")
-    ai_reply_last_request[person] = now
-    try:
-        draft = await asyncio.to_thread(
-            generate_gemini_text,
-            prompt,
-            "You help someone draft a warm, genuine reply to a message. Use only the prompt provided; no conversation history is available. "
-            "Write one concise, natural message in first person that the user can edit before sending. Do not impersonate the other participant, "
-            "invent shared memories, mention AI, or include quotation marks.",
-            160,
-        )
-    except Exception as error:
-        raise HTTPException(status_code=502, detail="Gemini could not draft a reply right now.") from error
-    draft = " ".join(draft.replace('"', "").split()).strip()
-    if not draft:
-        raise HTTPException(status_code=502, detail="Gemini returned an empty draft.")
-    return {"draft": draft[:300]}
+            upsert_app_setting(connection, "gemini_recent_welcome_messages", json.dumps(recent_quotes))
+    return {"enabled": True, "quote": quote_text}
 
 
 @app.get("/api/auth/session")
