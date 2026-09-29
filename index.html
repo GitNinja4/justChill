@@ -317,7 +317,7 @@
       <button type="submit">Open our little world</button>
       <p class="form-error" id="login-error" role="status"></p>
     </form>
-    <p class="gate-foot">First visit? The starting sentences are “I'm Aditya” and “I'm Tishu”. Change yours in Profile so it stays just yours.</p>
+    <p class="gate-foot">First visit? Your original sign-in sentence works until you change it in Profile.</p>
   </div>
 </section>
 
@@ -349,12 +349,12 @@
 
   <div class="thread">
     <div class="node">
-      <p class="city" id="city-aditya">Delhi</p><p class="who">Aditya</p>
+      <p class="city" id="city-aditya">Delhi</p><p class="who" id="name-aditya">Aditya</p>
       <p class="t" id="time-aditya">--:--</p><p class="d" id="date-aditya">-</p>
     </div>
     <div class="line"></div>
     <div class="node">
-      <p class="city" id="city-tishu">Sydney</p><p class="who">Tishu</p>
+      <p class="city" id="city-tishu">Sydney</p><p class="who" id="name-tishu">Tishu</p>
       <p class="t" id="time-tishu">--:--</p><p class="d" id="date-tishu">-</p>
     </div>
   </div>
@@ -566,6 +566,7 @@
 <script>
   let currentUser = null;
   let signedInPerson = null;
+  let profileDisplayNames = {aditya:'Aditya',tishu:'Tishu'};
   const defaultProfileLocations = {
     aditya:{city:'Delhi',time_zone:'Asia/Kolkata'},
     tishu:{city:'Sydney',time_zone:'Australia/Sydney'}
@@ -647,7 +648,32 @@
     const difference = m ? `${h}h ${m}m` : `${h}h`;
     document.getElementById('gap-text').textContent = diff === 0
       ? 'Both cities share the same local time.'
-      : diff > 0 ? `Tishu is ${difference} ahead of Aditya.` : `Aditya is ${difference} ahead of Tishu.`;
+      : diff > 0 ? `${profileDisplayNames.tishu} is ${difference} ahead of ${profileDisplayNames.aditya}.` : `${profileDisplayNames.aditya} is ${difference} ahead of ${profileDisplayNames.tishu}.`;
+  }
+
+  function updateDisplayNameSurfaces(){
+    document.getElementById('name-aditya').textContent = profileDisplayNames.aditya;
+    document.getElementById('name-tishu').textContent = profileDisplayNames.tishu;
+    document.title = `${profileDisplayNames.aditya} & ${profileDisplayNames.tishu}`;
+    if(signedInPerson){
+      currentUser = profileDisplayNames[signedInPerson];
+      document.getElementById('profile-name').textContent = currentUser;
+      document.getElementById('profile-signed-name').textContent = currentUser;
+      document.getElementById('chat-who').textContent = currentUser;
+    }
+    tick();
+  }
+
+  async function loadDisplayNames(){
+    try{
+      const response = await fetch('/api/profile/display-names', {cache:'no-store'});
+      if(!response.ok) return;
+      const result = await response.json();
+      for(const person of ['aditya','tishu']){
+        if(typeof result.display_names?.[person] === 'string') profileDisplayNames[person] = result.display_names[person];
+      }
+      updateDisplayNameSurfaces();
+    }catch(err){}
   }
 
   function applyProfileLocation(person, location){
@@ -783,8 +809,11 @@
     document.getElementById('profile-name').textContent = currentUser;
     document.getElementById('profile-signed-name').textContent = currentUser;
     document.getElementById('chat-who').textContent = currentUser;
+    profileDisplayNames[signedInPerson] = currentUser;
     loadCallConfiguration();
     loadProfileLocations();
+    updateDisplayNameSurfaces();
+    loadDisplayNames();
     loadCallHistory();
     fetch('/api/messages').then(response=>{
       if(!response.ok) throw new Error('Messages could not be loaded');
@@ -803,7 +832,7 @@
       timeZone:profileLocations.tishu.time_zone, hour:'2-digit', hourCycle:'h23'
     }).format(new Date()));
     const periods = [
-      {until:12, label:'GOOD MORNING, TISHU', lines:[
+      {until:12, label:'GOOD MORNING, LOVELY', lines:[
         "Morning, cutie. I'm already rooting for you.",
         'Good morning, sleepyhead. May today be extra kind to you.',
         'Hey, sunshine. You make even the early hours look lovely.',
@@ -1424,15 +1453,23 @@
   }
 
   function applyDisplayName(person, name){
-    if(person === signedInPerson){
-      currentUser = name;
-      document.getElementById('profile-name').textContent = name;
-      document.getElementById('profile-signed-name').textContent = name;
-      document.getElementById('chat-who').textContent = name;
-      document.getElementById('display-name').value = name;
-    }
+    if(!Object.hasOwn(profileDisplayNames, person) || typeof name !== 'string' || !name.trim()) return;
+    const previousName = profileDisplayNames[person];
+    profileDisplayNames[person] = name;
+    updateDisplayNameSurfaces();
     lastMessages = lastMessages.map(message=>message.person === person ? {...message, from:name} : message);
+    pendingChatMessages.forEach(job=>{
+      if(job.message.person === person) job.message.from = name;
+    });
+    if(activeLetter){
+      if(activeLetter.from === previousName) activeLetter.from = name;
+      if(activeLetter.to === previousName) activeLetter.to = name;
+      document.getElementById('letter-reading-from').textContent = `A little letter from ${activeLetter.from}`;
+    }
     renderMessages(lastMessages);
+    loadPostcards();
+    loadCallHistory();
+    if(activeCall) updateCallDialog();
   }
 
   function setLetterView(view){
@@ -2018,7 +2055,7 @@
 
   function callPeerName(person){
     const knownMessage = lastMessages.find(message=>message.person === person && message.from);
-    return knownMessage?.from || (person === 'aditya' ? 'Aditya' : 'Tishu');
+    return knownMessage?.from || profileDisplayNames[person];
   }
 
   function setCallAvailability(message){

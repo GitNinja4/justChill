@@ -678,6 +678,17 @@ async def get_auth_session(request: Request):
     return {"person": person, "name": name}
 
 
+@app.get("/api/profile/display-names")
+async def get_display_names(request: Request):
+    authenticated_person(request)
+    with database() as connection:
+        names = {
+            row["person"]: row["display_name"]
+            for row in connection.execute("SELECT person, display_name FROM profiles").fetchall()
+        }
+    return {"display_names": names}
+
+
 @app.put("/api/profile/display-name")
 async def update_display_name(payload: DisplayNameRequest, request: Request):
     person = authenticated_person(request)
