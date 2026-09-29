@@ -5,22 +5,13 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
       - key: DATABASE_URL
-        fromDatabase:
-          name: aditya-and-tishu-db
-          property: connectionString
+        sync: false
       - key: GEOAPIFY_API_KEY
         sync: false
       - key: CORS_ORIGINS
         value: https://aditya-and-tishu.onrender.com
-
-databases:
-  - name: aditya-and-tishu-db
-    databaseName: aditya_tishu
-    user: aditya_tishu
-    plan: 0.1c-256mb
-    region: oregon
-    ipAllowList: []

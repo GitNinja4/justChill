@@ -295,6 +295,46 @@
     .line::before{top:50%; left:-8px; transform:translateY(-50%);} .line::after{top:50%; right:-8px; left:auto; transform:translateY(-50%);}
   }
   @media (max-width:360px){h1{font-size:28px;}}
+
+  /* Responsive safety rules for compact and short viewports. */
+  dialog{max-height:calc(100dvh - 24px); overflow-y:auto;}
+  dialog.call-dialog{overflow-y:auto;}
+  .call-history-route,.call-history-outcome{min-width:0; overflow-wrap:anywhere;}
+  .call-start-actions > .connect-btn{flex:1 1 190px; min-height:46px;}
+
+  @media (max-width:720px){
+    .wrap{width:min(100%,640px);}
+    .call-start-actions > .connect-btn{flex-basis:180px;}
+  }
+
+  @media (max-width:540px){
+    .wrap{padding-top:calc(30px + env(safe-area-inset-top,0px)); padding-bottom:calc(48px + env(safe-area-inset-bottom,0px));}
+    .page-top{justify-content:space-between;}
+    .chat-head{align-items:flex-start;}
+    .chat-in button:not(.attach-trigger){height:42px; padding:0 14px;}
+    .chat-in input,.login-form input,.profile-form input,.letter-form textarea{font-size:16px;}
+    .letter-notice{align-items:flex-start;}
+    .letter-notice > span{min-width:0; overflow-wrap:anywhere;}
+    .call-stage{min-height:220px;}
+    .call-start-actions > .connect-btn{flex-basis:100%;}
+  }
+
+  @media (max-width:380px){
+    .wrap{padding-left:12px; padding-right:12px;}
+    .chat{padding-left:10px; padding-right:10px;}
+    .chat-in{gap:5px;}
+    .chat-in .attach-trigger{width:40px; height:40px;}
+    .chat-in button:not(.attach-trigger){padding-left:12px; padding-right:12px;}
+    .welcome-card{padding-left:20px; padding-right:20px;}
+  }
+
+  @media (max-height:600px) and (orientation:landscape){
+    .gate{padding:12px;}
+    .gate-inner{padding:20px;}
+    .call-panel{padding:10px;}
+    .call-stage{min-height:170px;}
+    .call-status{margin:7px 0;}
+  }
 </style>
 </head>
 <body>
@@ -918,6 +958,20 @@
     signedInPerson = null;
     currentUser = null;
     if(activeCall) endCurrentCall(false);
+    pendingChatMessages.forEach(job=>{
+      clearTimeout(job.ackTimer);
+      job.previewUrls?.forEach(url=>{ if(url) URL.revokeObjectURL(url); });
+    });
+    pendingChatMessages.clear();
+    messagePreviewUrls.forEach(urls=>urls.forEach(url=>{ if(url) URL.revokeObjectURL(url); }));
+    messagePreviewUrls.clear();
+    pendingChatFiles = [];
+    if(postcardPreviewUrl) URL.revokeObjectURL(postcardPreviewUrl);
+    postcardPreviewUrl = null;
+    pendingPostcardFile = null;
+    pendingPostcardUploadId = null;
+    postcardCache = [];
+    activeLetter = null;
     authLoading.hidden = true;
     clearTimeout(welcomeTimer);
     welcomeTimer = null;

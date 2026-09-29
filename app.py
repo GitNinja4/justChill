@@ -1,17 +1,15 @@
 import asyncio
 import hashlib
-import hmac
 import io
 import json
 import os
 import secrets
-import sqlite3
 import time
 import urllib.error
 import urllib.request
 import uuid
 import zipfile
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -23,83 +21,51 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError
+from server.realtime import (
+    active_call_routes,
+    broadcast,
+    connected_clients,
+    connected_clients_by_person,
+)
+from server.db import database
+from server.auth import (
+    authenticated_person,
+    clear_login_failures,
+    enforce_login_rate_limit,
+    hash_phrase,
+    login_failures,
+    login_source,
+    needs_hash_upgrade,
+    phrase_matches,
+    profile_name,
+    record_login_failure,
+    require_owner,
+    session_person,
+    validate_person,
+)
+from server.config import (
+    ALLOWED_ATTACHMENT_TYPES,
+    ALLOWED_ORIGINS,
+    BASE_DIR,
+    CALL_SIGNAL_ACTIONS,
+    DATABASE_PATH,
+    DATABASE_URL,
+    DEFAULT_LOCATIONS,
+    LOGIN_MAX_FAILURES,
+    LOGIN_WINDOW_SECONDS,
+    MAX_ATTACHMENT_SIZE,
+    MAX_CALL_SIGNAL_BYTES,
+    MAX_CHAT_ATTACHMENTS,
+    PASSWORD_ROUNDS,
+    PEOPLE,
+    SESSION_COOKIE,
+    SESSION_SECONDS,
+    VALID_PEOPLE,
+)
 
 
-BASE_DIR = Path(__file__).resolve().parent
-DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(BASE_DIR / "data" / "relationship.sqlite3")))
-DATABASE_URL = os.getenv("DATABASE_URL")
-VALID_PEOPLE = {"aditya", "tishu"}
-PEOPLE = {"aditya": "Aditya", "tishu": "Tishu"}
-DEFAULT_LOCATIONS = {
-    "aditya": {"city": "Delhi", "time_zone": "Asia/Kolkata"},
-    "tishu": {"city": "Sydney", "time_zone": "Australia/Sydney"},
-}
-SESSION_COOKIE = "aditya_tishu_session"
-SESSION_SECONDS = 60 * 60 * 24 * 30
-PASSWORD_ROUNDS = 310_000
-password_hasher = PasswordHasher()
-ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:8000,http://127.0.0.1:8000,http://localhost:5500,http://127.0.0.1:5500",
-    ).split(",")
-    if origin.strip()
-]
-CALL_SIGNAL_ACTIONS = {
-    "invite", "accept", "decline", "busy", "cancel", "offer", "answer", "ice", "connected", "hangup"
-}
-MAX_CALL_SIGNAL_BYTES = 128 * 1024
 geocode_lock = asyncio.Lock()
 last_geocode_request_at = 0.0
-
-
-class DatabaseConnection:
-    def __init__(self, connection, is_postgres: bool):
-        self.connection = connection
-        self.is_postgres = is_postgres
-
-    def execute(self, query: str, parameters=()):
-        if self.is_postgres:
-            query = query.replace("?", "%s")
-        return self.connection.execute(query, parameters)
-
-    def __enter__(self):
-        self.connection.__enter__()
-        return self
-
-    def __exit__(self, exception_type, exception, traceback):
-        return self.connection.__exit__(exception_type, exception, traceback)
-
-    def close(self):
-        self.connection.close()
-
-
-def connect_db():
-    if DATABASE_URL:
-        try:
-            import psycopg
-            from psycopg.rows import dict_row
-        except ImportError as error:
-            raise RuntimeError("Install psycopg to use DATABASE_URL.") from error
-        connection = psycopg.connect(DATABASE_URL, row_factory=dict_row)
-        return DatabaseConnection(connection, is_postgres=True)
-
-    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DATABASE_PATH, timeout=10)
-    connection.row_factory = sqlite3.Row
-    return DatabaseConnection(connection, is_postgres=False)
-
-
-@contextmanager
-def database():
-    connection = connect_db()
-    try:
-        with connection:
-            yield connection
-    finally:
-        connection.close()
 
 
 def initialize_db():
@@ -290,6 +256,20 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(self), microphone=(self), geolocation=(self)"
+    )
+    if request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return response
+
+
 class ChatMessage(BaseModel):
     text: str = Field(default="", max_length=300)
     attachments: list[str] = Field(default_factory=list, max_length=4)
@@ -322,20 +302,6 @@ class LocationUpdateRequest(BaseModel):
 class PostcardRequest(BaseModel):
     text: str = Field(default="", max_length=500)
     attachments: list[str] = Field(default_factory=list, max_length=1)
-
-
-MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
-MAX_CHAT_ATTACHMENTS = 4
-ALLOWED_ATTACHMENT_TYPES = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".pdf": "application/pdf",
-    ".txt": "text/plain",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
 
 
 def attachment_metadata(connection, attachment_ids: list[str], person: str, limit: int):
@@ -389,71 +355,6 @@ def valid_attachment_data(extension: str, data: bytes):
     return False
 
 
-def hash_phrase(phrase: str, salt: bytes | None = None):
-    if salt is None:
-        return "", password_hasher.hash(phrase.strip().casefold())
-    salt = salt or secrets.token_bytes(16)
-    phrase_hash = hashlib.pbkdf2_hmac(
-        "sha256", phrase.strip().casefold().encode("utf-8"), salt, PASSWORD_ROUNDS
-    )
-    return salt.hex(), phrase_hash.hex()
-
-
-def phrase_matches(phrase: str, salt: str, phrase_hash: str):
-    if phrase_hash.startswith("$argon2"):
-        try:
-            password_hasher.verify(phrase_hash, phrase.strip().casefold())
-            return True
-        except (VerifyMismatchError, VerificationError):
-            return False
-    _, candidate_hash = hash_phrase(phrase, bytes.fromhex(salt))
-    return hmac.compare_digest(candidate_hash, phrase_hash)
-
-
-def needs_hash_upgrade(phrase_hash: str):
-    return not phrase_hash.startswith("$argon2")
-
-
-def session_person(token: str | None):
-    if not token:
-        return None
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    with database() as connection:
-        row = connection.execute(
-            "SELECT person, expires_at FROM sessions WHERE token_hash = ?", (token_hash,)
-        ).fetchone()
-        if row and row["expires_at"] <= int(time.time()):
-            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
-            return None
-    return row["person"] if row else None
-
-
-def authenticated_person(request: Request):
-    person = session_person(request.cookies.get(SESSION_COOKIE))
-    if not person:
-        raise HTTPException(status_code=401, detail="Sign in to open your little corner.")
-    return person
-
-
-def require_owner(request: Request, person: str):
-    validate_person(person)
-    signed_in_person = authenticated_person(request)
-    if signed_in_person != person:
-        raise HTTPException(status_code=403, detail="That plan belongs to the other person.")
-
-
-def validate_person(person: str):
-    if person not in VALID_PEOPLE:
-        raise HTTPException(status_code=404, detail="That person isn't on this little map.")
-
-
-def profile_name(connection, person: str):
-    row = connection.execute(
-        "SELECT display_name FROM profiles WHERE person = ?", (person,)
-    ).fetchone()
-    return row["display_name"] if row else PEOPLE[person]
-
-
 def serialize_message(row, connection):
     created_at = datetime.fromisoformat(row["created_at"])
     sender_id = row["sender_id"]
@@ -492,6 +393,16 @@ def message_with_reactions(connection, message_id):
 @app.get("/")
 async def home():
     return FileResponse(BASE_DIR / "index.html")
+
+
+@app.get("/health")
+async def health():
+    try:
+        with database() as connection:
+            connection.execute("SELECT 1").fetchone()
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Database is unavailable.") from error
+    return {"status": "ok"}
 
 
 @app.get("/api/call-config")
@@ -901,8 +812,11 @@ async def update_welcome_sentence(payload: SettingRequest, request: Request):
 
 @app.post("/api/auth/login")
 async def login(payload: LoginRequest, request: Request, response: Response):
+    source = login_source(request)
+    await enforce_login_rate_limit(source)
     phrase = payload.sentence.strip()
     if not phrase:
+        await record_login_failure(source)
         raise HTTPException(status_code=401, detail="That sentence didn't sound quite right.")
     with database() as connection:
         rows = connection.execute(
@@ -914,6 +828,7 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         if phrase_matches(phrase, row["salt"], row["phrase_hash"])
     ]
     if len(matches) != 1:
+        await record_login_failure(source)
         raise HTTPException(status_code=401, detail="That sentence didn't sound quite right.")
 
     person = matches[0]
@@ -943,6 +858,7 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     )
     with database() as connection:
         name = profile_name(connection, person)
+    await clear_login_failures(source)
     return {"person": person, "name": name}
 
 
@@ -1243,25 +1159,6 @@ async def set_reaction(message_id: int, payload: dict, request: Request):
         updated_message = message_with_reactions(connection, message_id)
     await broadcast({"type": "message_updated", "message": updated_message})
     return updated_message
-
-
-connected_clients: set[WebSocket] = set()
-connected_clients_by_person: dict[str, set[WebSocket]] = {person: set() for person in VALID_PEOPLE}
-active_call_routes: dict[str, dict[str, WebSocket]] = {}
-broadcast_lock = asyncio.Lock()
-
-
-async def broadcast(message: dict):
-    async with broadcast_lock:
-        clients = list(connected_clients)
-        results = await asyncio.gather(
-            *(client.send_json(message) for client in clients), return_exceptions=True
-        )
-        for client, result in zip(clients, results):
-            if isinstance(result, Exception):
-                connected_clients.discard(client)
-                for person_clients in connected_clients_by_person.values():
-                    person_clients.discard(client)
 
 
 async def relay_call_signal(websocket: WebSocket, person: str, payload: dict):

@@ -3,6 +3,10 @@
 
 A private-feeling, single-page long-distance space served by FastAPI. It has live Delhi/Sydney clocks, a database-backed WebSocket chat, sentence-based sign-in for Aditya and Tishu, persistent reactions, authorized message deletion, and in-app WebRTC audio/video calls. Local development uses SQLite by default; Render uses PostgreSQL.
 
+## Project structure
+
+`app.py` remains the deployment entry point and exports the FastAPI application. Shared backend concerns are being moved into the `server/` package: configuration is in `server/config.py`, database connections are in `server/db.py`, authentication and sessions are in `server/auth.py`, and WebSocket/call state is in `server/realtime.py`. The existing `index.html` still contains the page UI while frontend extraction continues.
+
 ## Run it on your computer
 
 1. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/).
@@ -14,22 +18,22 @@ A private-feeling, single-page long-distance space served by FastAPI. It has liv
 7. Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The SQLite database is created at `data/relationship.sqlite3`.
 8. Sign in with `I'm Aditya` or `I'm Tishu`, then open **My little corner** and change the starter sentence to a private phrase of at least 8 characters.
 
-## Deploy free on Render
+## Deploy on Render
 
 1. Create a [GitHub account](https://github.com/) if you do not already have one, then create a new repository. In this project folder, run `git init`, `git add .`, `git commit -m "Build Aditya and Tishu app"`, and push the repository to GitHub. GitHub's page for a new repository shows the exact commands for connecting an existing folder.
 2. Create a [Render account](https://render.com/) and connect it to GitHub.
-3. In Render, choose **New +**, then **Blueprint**. Select the GitHub repository containing this project. Render detects `render.yaml` and prepares the web service and a private PostgreSQL database.
+3. Create an external PostgreSQL database on the provider you selected, then keep its SSL connection string ready as a secret. In Render, choose **New +**, then **Blueprint**, and select the GitHub repository containing this project. Render detects `render.yaml` and prepares the free web service; it does not create a database.
 4. For reliable calling across restrictive Wi-Fi and mobile networks, optionally configure TURN in the Render service environment; see **In-app calls** below.
-5. Review the database plan and its price in Render before applying the Blueprint. The database uses the smallest paid Render Postgres plan so chat history does not expire with the free database tier.
-6. Back up any existing messages from the currently running SQLite deployment before syncing the PostgreSQL configuration. The app does not automatically copy existing SQLite data into PostgreSQL.
-7. Apply the Blueprint and wait for the database and service to finish deploying. Open the `onrender.com` URL Render gives you. Update `CORS_ORIGINS` in `render.yaml` to that exact URL if Render assigned a different subdomain, then commit and push the change to redeploy.
+5. In the Render service environment, set `DATABASE_URL` to the external provider's SSL connection string. The free web service alone does not make the complete deployment free; the database provider's limits, backups, and retention policy still apply.
+6. Back up any existing messages from the currently running SQLite deployment before migrating to PostgreSQL. The app does not automatically copy existing SQLite data into the external database.
+7. Apply the Blueprint and wait for the service to deploy. Open the `/health` URL and confirm it returns `{"status":"ok"}`. Open the `onrender.com` URL Render gives you and update `CORS_ORIGINS` in `render.yaml` to that exact URL if Render assigned a different subdomain, then commit and push the change to redeploy.
 8. Open the URL and sign in with `I'm Aditya` or `I'm Tishu`. Each person should open **My little corner** and change their starter sentence to a private phrase of at least 8 characters, then share the URL with each other.
 
 ## In-app calls
 
 Audio and video calls use browser WebRTC. Call setup is relayed through the authenticated chat WebSocket; media is sent directly between browsers when possible. Microphone and camera permissions are requested only after a person starts or answers a call. WebRTC encrypts media in transit; the app does not record calls.
 
-The app includes a public STUN server, which is enough for many networks but not all. For reliable connections across restrictive Wi-Fi and mobile networks, configure a TURN service in the Render web service environment with `CALL_TURN_URLS` (comma-separated TURN URLs), `CALL_TURN_USERNAME`, and `CALL_TURN_CREDENTIAL`. Use restricted client credentials with quotas, not a provider admin secret; these credentials are delivered to the two authenticated clients. Local development can use the STUN fallback.
+The app includes a public STUN server, which is enough for many networks but not all. For reliable connections across restrictive Wi-Fi and mobile networks, configure a TURN service in the Render web service environment with `CALL_TURN_URLS` (comma-separated TURN URLs), `CALL_TURN_USERNAME`, and `CALL_TURN_CREDENTIAL`. A free web host does not guarantee a free TURN relay. Use restricted client credentials with quotas, not a provider admin secret; these credentials are delivered to the two authenticated clients. Local development can use the STUN fallback.
 
 WebSocket connections are held in the web process's memory, so run one web instance unless shared signaling/pub-sub is added for multiple instances.
 
@@ -43,7 +47,7 @@ Set `GEOAPIFY_API_KEY` in the Render service environment to use Geoapify as the 
 
 ### Database and storage
 
-The Render Blueprint provisions a paid Postgres database and injects its private connection URL as `DATABASE_URL`. The web service can remain on its free plan; database charges are separate. Render's free Postgres databases expire after 30 days and do not include backups, so this Blueprint does not use the free database plan. Local SQLite data is not automatically migrated when changing databases. Back up any existing production data before syncing a database change.
+The Render Blueprint provisions only the free web service and expects an external PostgreSQL connection string in the `DATABASE_URL` secret. The database provider's charges, limits, backups, and retention policy are separate. Local SQLite data is not automatically migrated when changing databases. Back up any existing production data before syncing a database change. Render Free Web Services have an ephemeral filesystem, so production data must not rely on local SQLite or local uploaded files.
 
 The page itself, REST API, and WebSocket are served by the same FastAPI service. No separate frontend hosting or external database is needed. A person's sign-in session authorizes their chat, attachments, and call signaling.
 
