@@ -152,6 +152,12 @@ def initialize_db():
                 data {'BYTEA' if DATABASE_URL else 'BLOB'} NOT NULL,
                 created_at TEXT NOT NULL
             )""",
+            """CREATE TABLE IF NOT EXISTS hidden_messages (
+                message_id BIGINT NOT NULL,
+                person TEXT NOT NULL,
+                hidden_at TEXT NOT NULL,
+                PRIMARY KEY (message_id, person)
+            )""",
             "CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at)",
             "CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions (message_id)",
             "CREATE INDEX IF NOT EXISTS idx_postcards_recipient_reveal ON postcards (recipient_id, reveal_at)",
@@ -692,13 +698,59 @@ async def change_login_sentence(payload: ChangeSentenceRequest, request: Request
 
 @app.get("/api/messages")
 async def get_messages(request: Request):
-    authenticated_person(request)
+    person = authenticated_person(request)
     with database() as connection:
         rows = connection.execute(
-            "SELECT id, sender, text, created_at, deleted_at FROM messages ORDER BY id DESC LIMIT 100"
+            "SELECT id, sender FROM messages "
+            "WHERE NOT EXISTS (SELECT 1 FROM hidden_messages WHERE message_id = messages.id AND person = ?) "
+            "ORDER BY id DESC LIMIT 100",
+            (person,),
         ).fetchall()
         messages = [message_with_reactions(connection, row["id"]) for row in reversed(rows)]
     return messages
+
+
+def message_attachment_ids(attachments_json: str | None):
+    try:
+        attachments = json.loads(attachments_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(attachments, list):
+        return []
+    return [str(item["id"]) for item in attachments if isinstance(item, dict) and item.get("id")]
+
+
+def cleanup_unreferenced_attachments(connection, attachment_ids: list[str]):
+    candidates = set(attachment_ids)
+    if not candidates:
+        return
+    for table in ("messages", "postcards"):
+        rows = connection.execute(f"SELECT attachments FROM {table}").fetchall()
+        for row in rows:
+            candidates.difference_update(message_attachment_ids(row["attachments"]))
+            if not candidates:
+                return
+    for attachment_id in candidates:
+        connection.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
+
+
+@app.delete("/api/messages/{message_id}/hide")
+async def hide_message(message_id: int, request: Request):
+    person = authenticated_person(request)
+    hidden_at = datetime.now(timezone.utc).isoformat()
+    with database() as connection:
+        message = connection.execute(
+            "SELECT id, deleted_at FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if not message or message["deleted_at"]:
+            raise HTTPException(status_code=404, detail="That message is unavailable.")
+        connection.execute(
+            "INSERT INTO hidden_messages (message_id, person, hidden_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (message_id, person) DO NOTHING",
+            (message_id, person, hidden_at),
+        )
+    await broadcast({"type": "message_hidden", "message_id": message_id, "person": person})
+    return {"ok": True}
 
 
 @app.post("/api/attachments")
@@ -761,22 +813,45 @@ async def delete_message(message_id: int, request: Request):
     person = authenticated_person(request)
     with database() as connection:
         row = connection.execute(
-            "SELECT sender, sender_id, deleted_at FROM messages WHERE id = ?", (message_id,)
+            "SELECT sender_id, deleted_at, attachments FROM messages WHERE id = ?", (message_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="That message no longer exists.")
         if row["sender_id"] != person:
             raise HTTPException(status_code=403, detail="You can only delete your own messages.")
-        if row["deleted_at"]:
-            return {"ok": True}
+        attachment_ids = message_attachment_ids(row["attachments"])
         deleted_at = datetime.now(timezone.utc).isoformat()
         connection.execute(
-            "UPDATE messages SET deleted_at = ?, deleted_by = ?, text = ? WHERE id = ?",
-            (deleted_at, person, "", message_id),
+            "UPDATE messages SET deleted_at = COALESCE(deleted_at, ?), deleted_by = ?, text = ?, attachments = ? WHERE id = ?",
+            (deleted_at, person, "", "[]", message_id),
         )
+        connection.execute("DELETE FROM reactions WHERE message_id = ?", (message_id,))
+        cleanup_unreferenced_attachments(connection, attachment_ids)
         message = message_with_reactions(connection, message_id)
     await broadcast({"type": "message_updated", "message": message})
     return {"ok": True, "message": message}
+
+
+@app.delete("/api/messages/{message_id}/permanent")
+async def permanently_erase_message(message_id: int, request: Request):
+    person = authenticated_person(request)
+    with database() as connection:
+        lock_clause = " FOR UPDATE" if DATABASE_URL else ""
+        row = connection.execute(
+            "SELECT sender_id, attachments FROM messages WHERE id = ?" + lock_clause,
+            (message_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="That message no longer exists.")
+        if row["sender_id"] != person:
+            raise HTTPException(status_code=403, detail="You can only permanently erase your own messages.")
+        attachment_ids = message_attachment_ids(row["attachments"])
+        connection.execute("DELETE FROM reactions WHERE message_id = ?", (message_id,))
+        connection.execute("DELETE FROM hidden_messages WHERE message_id = ?", (message_id,))
+        connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+        cleanup_unreferenced_attachments(connection, attachment_ids)
+    await broadcast({"type": "message_removed", "message_id": message_id})
+    return {"ok": True, "message_id": message_id}
 
 
 @app.put("/api/messages/{message_id}/reaction")
@@ -840,7 +915,10 @@ async def chat_socket(websocket: WebSocket):
     connected_clients.add(websocket)
     with database() as connection:
         rows = connection.execute(
-            "SELECT id, sender, text, created_at, deleted_at FROM messages ORDER BY id DESC LIMIT 100"
+            "SELECT id, sender FROM messages "
+            "WHERE NOT EXISTS (SELECT 1 FROM hidden_messages WHERE message_id = messages.id AND person = ?) "
+            "ORDER BY id DESC LIMIT 100",
+            (person,),
         ).fetchall()
         messages = [message_with_reactions(connection, row["id"]) for row in reversed(rows)]
     await websocket.send_json({"type": "history", "messages": messages})
