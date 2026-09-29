@@ -699,12 +699,12 @@
   }
 
   function updatePostcardBadge(){
-    const count = postcardCache.length;
+    const unreadCount = postcardCache.filter(postcard=>!postcard.sent).length;
     const badge = document.getElementById('postcard-badge');
-    badge.hidden = count === 0;
-    badge.textContent = count > 9 ? '9+' : String(count);
-    document.getElementById('postcard-launch').classList.toggle('has-new', count > 0);
-    document.getElementById('letter-count').textContent = count ? `· ${count}` : '';
+    badge.hidden = unreadCount === 0;
+    badge.textContent = unreadCount > 9 ? '9+' : String(unreadCount);
+    document.getElementById('postcard-launch').classList.toggle('has-new', unreadCount > 0);
+    document.getElementById('letter-count').textContent = postcardCache.length ? `· ${postcardCache.length}` : '';
   }
 
   function showerFlowers(){
