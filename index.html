@@ -54,6 +54,10 @@
   .msg.me{align-self:flex-end; background:var(--coral); color:var(--sky1); border-bottom-right-radius:4px;}
   .msg.them{align-self:flex-start; background:rgba(255,255,255,0.08); border-bottom-left-radius:4px;}
   .msg.deleted{font-style:italic; opacity:.72;}
+  .attachment-list{display:grid; gap:7px; margin-top:8px;}
+  .attachment-image{display:block; max-width:min(100%,260px); max-height:220px; border-radius:8px; object-fit:cover;}
+  .attachment-doc{display:block; max-width:260px; overflow-wrap:anywhere; border:1px solid rgba(255,255,255,.18); border-radius:8px; padding:9px 10px; color:inherit; font-size:12px; text-decoration:none;}
+  .attachment-doc:hover{text-decoration:underline;}
   .reactions{display:flex; gap:4px; flex-wrap:wrap; margin-top:5px;}
   .reaction{font-size:12px; border-radius:999px; padding:2px 6px; background:rgba(0,0,0,.16);}
   .message-menu{position:fixed; z-index:20; display:flex; gap:4px; padding:6px; border:1px solid rgba(255,255,255,.16); border-radius:999px; background:#211747; box-shadow:0 12px 36px rgba(0,0,0,.4);}
@@ -65,6 +69,10 @@
   .chat-in{display:flex; gap:8px; margin-top:10px;}
   .chat-in input{flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:100px; color:var(--cream); font-size:14px; padding:11px 16px; font-family:'Inter',sans-serif;}
   .chat-in button{background:var(--gold); color:var(--sky1); border:none; border-radius:100px; font-weight:600; padding:0 18px; cursor:pointer; font-size:14px;}
+  .chat-in .attach-trigger{flex:none; width:42px; height:42px; padding:0; border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.07); color:var(--cream); font-size:23px; line-height:1;}
+  .pending-files{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .pending-file{display:flex; align-items:center; gap:7px; max-width:100%; border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:5px 8px; color:var(--dim); font-size:11px; overflow-wrap:anywhere;}
+  .pending-file button{flex:none; border:0; background:transparent; color:var(--coral); font-size:16px; cursor:pointer;}
   .note{color:var(--dim); font-size:11.5px; text-align:center; margin-top:8px;}
   .page-top{display:flex; justify-content:flex-end; align-items:center; gap:9px; margin-bottom:16px;}
   .postcard-launch{position:relative; width:40px; height:40px; display:grid; place-items:center; border:1px solid rgba(239,184,84,.35); border-radius:50%; background:rgba(239,184,84,.1); color:var(--cream); font-size:20px; cursor:pointer;}
@@ -95,6 +103,10 @@
   .postcard-open,.letter-action{margin-top:10px; border:0; border-radius:9px; padding:10px 13px; background:var(--gold); color:var(--sky1); font:600 12px 'Inter',sans-serif; cursor:pointer;}
   .letter-form label{display:block; color:var(--cream); font-size:12px; margin:14px 0 7px;}
   .letter-form textarea{display:block; width:100%; min-height:138px; resize:vertical; border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:12px; background:rgba(255,255,255,.06); color:var(--cream); font:14px/1.5 'Inter',sans-serif;}
+  .letter-attach-row{display:flex; align-items:center; gap:10px; margin-top:10px;}
+  .letter-attach{border:1px solid rgba(255,255,255,.18); border-radius:8px; padding:8px 10px; background:transparent; color:var(--cream); font:12px 'Inter',sans-serif; cursor:pointer;}
+  .letter-attach-name{color:var(--dim); font-size:11px; overflow-wrap:anywhere;}
+  .letter-attachment-image{display:block; max-width:100%; max-height:280px; margin-top:10px; border-radius:8px; object-fit:contain;}
   .letter-form button:disabled{opacity:.6; cursor:wait;}
   .letter-reading{margin-top:18px; padding:20px; border:1px solid rgba(239,184,84,.34); border-radius:12px; background:rgba(255,255,255,.06);}
   .letter-reading-from{color:var(--gold); font-size:11px; margin:0 0 10px;}
@@ -229,9 +241,12 @@
     </div>
     <div class="msgs" id="msgs"></div>
     <div class="chat-in">
+      <button class="attach-trigger" id="chat-attach-trigger" type="button" aria-label="Attach files" title="Attach files">＋</button>
+      <input id="chat-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp,.pdf,.txt,.docx" multiple hidden>
       <input id="msg-input" type="text" placeholder="no filter needed, she'll get it..." maxlength="300">
       <button id="msg-send" type="button">Send</button>
     </div>
+    <div class="pending-files" id="chat-pending-files" aria-live="polite"></div>
     <p class="note" id="sync-note">connecting…</p>
   </div>
 
@@ -264,7 +279,13 @@
     <section class="letter-panel" id="letter-write-panel" role="tabpanel" aria-labelledby="letter-write-tab" hidden>
       <form class="letter-form" id="postcard-form">
         <label for="postcard-text">Your note</label>
-        <textarea id="postcard-text" maxlength="500" placeholder="Something lovely to wake up to…" required></textarea>
+        <textarea id="postcard-text" maxlength="500" placeholder="Something lovely to wake up to…"></textarea>
+        <div class="letter-attach-row">
+          <button class="letter-attach" id="postcard-attach" type="button">＋ Add a photo</button>
+          <input id="postcard-file-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden>
+          <span class="letter-attach-name" id="postcard-file-name"></span>
+        </div>
+        <img class="letter-attachment-image" id="postcard-file-preview" alt="Selected photo preview" hidden>
         <button class="letter-action" id="postcard-send" type="submit">Seal with love</button>
         <p class="letter-error" id="letter-compose-status" role="status"></p>
       </form>
@@ -272,6 +293,7 @@
     <section class="letter-reading" id="letter-reading-panel" hidden>
       <p class="letter-reading-from" id="letter-reading-from"></p>
       <p class="letter-reading-text" id="letter-reading-text"></p>
+      <div id="letter-reading-attachments"></div>
       <div class="letter-actions">
         <button class="letter-action" id="letter-finish" type="button">Close letter</button>
       </div>
@@ -335,6 +357,9 @@
   let postcardNoticeTimer = null;
   let postcardCache = [];
   let activeLetter = null;
+  let pendingChatFiles = [];
+  let pendingPostcardFile = null;
+  let postcardPreviewUrl = null;
 
   // ---------- Clocks ----------
   function formatParts(date, tz){
@@ -585,6 +610,36 @@
   });
 
   // ---------- Messages ----------
+  function renderAttachments(container, attachments){
+    if(!attachments || !attachments.length) return;
+    const list = document.createElement('div');
+    list.className = 'attachment-list';
+    attachments.forEach(attachment=>{
+      const url = `/api/attachments/${encodeURIComponent(attachment.id)}`;
+      if(attachment.content_type.startsWith('image/')){
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        const image = document.createElement('img');
+        image.className = 'attachment-image';
+        image.src = url;
+        image.alt = attachment.name;
+        image.loading = 'lazy';
+        link.appendChild(image);
+        list.appendChild(link);
+      }else{
+        const link = document.createElement('a');
+        link.className = 'attachment-doc';
+        link.href = url;
+        link.download = attachment.name;
+        link.textContent = `↧ ${attachment.name}`;
+        list.appendChild(link);
+      }
+    });
+    container.appendChild(list);
+  }
+
   function renderMessages(list){
     lastMessages = list;
     const box = document.getElementById('msgs');
@@ -594,12 +649,16 @@
       const div = document.createElement('div');
       div.className = 'msg ' + (m.person === signedInPerson ? 'me' : 'them') + (m.deleted ? ' deleted' : '');
       div.dataset.messageId = m.id;
-      const textSpan = document.createElement('span');
-      textSpan.textContent = m.text;
+      if(m.text){
+        const textSpan = document.createElement('span');
+        textSpan.textContent = m.text;
+        div.appendChild(textSpan);
+      }
       const meta = document.createElement('span');
       meta.className = 'meta';
       meta.textContent = m.from + (m.ts ? ' · ' + new Date(m.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '');
-      div.appendChild(textSpan); div.appendChild(meta);
+      renderAttachments(div, m.attachments);
+      div.appendChild(meta);
       if(m.reactions && m.reactions.length){
         const reactions = document.createElement('div');
         reactions.className = 'reactions';
@@ -720,6 +779,7 @@
         note.className = 'postcard-text';
         note.textContent = postcard.text;
         item.appendChild(note);
+        renderAttachments(item, postcard.attachments);
       }else{
         const openButton = document.createElement('button');
         openButton.type = 'button';
@@ -755,6 +815,9 @@
       activeLetter = result;
       document.getElementById('letter-reading-from').textContent = `A little letter from ${result.from}`;
       document.getElementById('letter-reading-text').textContent = result.text;
+      const readingAttachments = document.getElementById('letter-reading-attachments');
+      readingAttachments.replaceChildren();
+      renderAttachments(readingAttachments, result.attachments);
       setLetterView('reading');
       await loadPostcards();
     }catch(err){ error.textContent = err.message || 'This letter could not be opened.'; }
@@ -801,21 +864,62 @@
   });
   document.getElementById('letter-finish').addEventListener('click', finishLetter);
 
+  document.getElementById('postcard-attach').addEventListener('click', ()=>document.getElementById('postcard-file-input').click());
+  document.getElementById('postcard-file-input').addEventListener('change', event=>{
+    const file = event.target.files[0] || null;
+    if(file && file.size > 10 * 1024 * 1024){
+      document.getElementById('letter-compose-status').textContent = 'Choose a photo that is 10 MB or smaller.';
+      event.target.value = '';
+      return;
+    }
+    if(postcardPreviewUrl) URL.revokeObjectURL(postcardPreviewUrl);
+    pendingPostcardFile = file;
+    document.getElementById('postcard-file-name').textContent = file ? file.name : '';
+    const preview = document.getElementById('postcard-file-preview');
+    if(file){
+      postcardPreviewUrl = URL.createObjectURL(file);
+      preview.src = postcardPreviewUrl;
+      preview.hidden = false;
+    }else{
+      preview.removeAttribute('src');
+      preview.hidden = true;
+    }
+  });
+
+  async function uploadAttachment(file){
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch('/api/attachments', {method:'POST', body:formData});
+    const result = await response.json();
+    if(!response.ok) throw new Error(result.detail || 'That file could not be uploaded.');
+    return result;
+  }
+
   document.getElementById('postcard-form').addEventListener('submit', async event=>{
     event.preventDefault();
     const form = event.currentTarget;
     const button = document.getElementById('postcard-send');
     const status = document.getElementById('letter-compose-status');
     status.textContent = '';
+    const text = document.getElementById('postcard-text').value.trim();
+    if(!text && !pendingPostcardFile){ status.textContent = 'Write a note or add a photo first.'; return; }
     button.disabled = true;
     try{
+      const attachments = pendingPostcardFile ? [await uploadAttachment(pendingPostcardFile)] : [];
       const response = await fetch('/api/postcards', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({text:document.getElementById('postcard-text').value})
+        body:JSON.stringify({text, attachments:attachments.map(attachment=>attachment.id)})
       });
       const result = await response.json();
       if(!response.ok) throw new Error(result.detail || 'Your letter could not be sealed.');
       form.reset();
+      pendingPostcardFile = null;
+      document.getElementById('postcard-file-input').value = '';
+      document.getElementById('postcard-file-name').textContent = '';
+      document.getElementById('postcard-file-preview').hidden = true;
+      document.getElementById('postcard-file-preview').removeAttribute('src');
+      if(postcardPreviewUrl) URL.revokeObjectURL(postcardPreviewUrl);
+      postcardPreviewUrl = null;
       status.textContent = `Sent to ${result.recipient_name}.`;
       await loadPostcards();
       setLetterView('inbox');
@@ -823,17 +927,68 @@
     finally{ button.disabled = false; }
   });
 
-  function sendMessage(){
-    const input = document.getElementById('msg-input');
-    const text = input.value.trim();
-    if(!text) return;
-    input.value = '';
-    if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
-      document.getElementById('sync-note').textContent = 'chat is reconnecting; your message is still here';
-      input.value = text;
+  function renderPendingChatFiles(){
+    const list = document.getElementById('chat-pending-files');
+    list.replaceChildren();
+    pendingChatFiles.forEach((file, index)=>{
+      const item = document.createElement('span');
+      item.className = 'pending-file';
+      const name = document.createElement('span');
+      name.textContent = file.name;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', `Remove ${file.name}`);
+      remove.addEventListener('click', ()=>{
+        pendingChatFiles.splice(index, 1);
+        renderPendingChatFiles();
+      });
+      item.append(name, remove);
+      list.appendChild(item);
+    });
+  }
+
+  document.getElementById('chat-attach-trigger').addEventListener('click', ()=>document.getElementById('chat-file-input').click());
+  document.getElementById('chat-file-input').addEventListener('change', event=>{
+    const error = document.getElementById('sync-note');
+    const selected = Array.from(event.target.files || []);
+    event.target.value = '';
+    if(pendingChatFiles.length + selected.length > 4){
+      error.textContent = 'Choose up to four files for one message.';
       return;
     }
-    chatSocket.send(JSON.stringify({text}));
+    const tooLarge = selected.find(file=>file.size > 10 * 1024 * 1024);
+    if(tooLarge){
+      error.textContent = `${tooLarge.name} is over the 10 MB limit.`;
+      return;
+    }
+    pendingChatFiles.push(...selected);
+    error.textContent = 'connected ✦ the dramatic voice is live';
+    renderPendingChatFiles();
+  });
+
+  async function sendMessage(){
+    const input = document.getElementById('msg-input');
+    const text = input.value.trim();
+    if(!text && !pendingChatFiles.length) return;
+    if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
+      document.getElementById('sync-note').textContent = 'chat is reconnecting; your message is still here';
+      return;
+    }
+    const button = document.getElementById('msg-send');
+    const note = document.getElementById('sync-note');
+    button.disabled = true;
+    try{
+      const attachments = [];
+      for(const file of pendingChatFiles) attachments.push(await uploadAttachment(file));
+      if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN) throw new Error('Chat reconnected; press Send again.');
+      chatSocket.send(JSON.stringify({text, attachments:attachments.map(attachment=>attachment.id)}));
+      input.value = '';
+      pendingChatFiles = [];
+      renderPendingChatFiles();
+      note.textContent = 'connected ✦ the dramatic voice is live';
+    }catch(err){ note.textContent = err.message || 'That message could not be sent.'; }
+    finally{ button.disabled = false; }
   }
   document.getElementById('msg-send').addEventListener('click', sendMessage);
   document.getElementById('msg-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });

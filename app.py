@@ -1,16 +1,20 @@
 import asyncio
 import hashlib
 import hmac
+import io
 import json
 import os
 import secrets
 import sqlite3
 import time
+import uuid
+import zipfile
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -134,9 +138,19 @@ def initialize_db():
                 sender_id TEXT NOT NULL,
                 recipient_id TEXT NOT NULL,
                 text TEXT NOT NULL,
+                attachments TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 reveal_at TEXT NOT NULL,
                 opened_at TEXT
+            )""",
+            f"""CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                uploaded_by TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                size BIGINT NOT NULL,
+                data {'BYTEA' if DATABASE_URL else 'BLOB'} NOT NULL,
+                created_at TEXT NOT NULL
             )""",
             "CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at)",
             "CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions (message_id)",
@@ -152,10 +166,20 @@ def initialize_db():
                     "SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'"
                 ).fetchall()
             }
+            existing_postcard_columns = {
+                row["column_name"]
+                for row in connection.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = 'postcards'"
+                ).fetchall()
+            }
         else:
             existing_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            existing_postcard_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(postcards)").fetchall()
             }
         if "deleted_at" not in existing_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN deleted_at TEXT")
@@ -163,6 +187,10 @@ def initialize_db():
             connection.execute("ALTER TABLE messages ADD COLUMN deleted_by TEXT")
         if "sender_id" not in existing_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN sender_id TEXT")
+        if "attachments" not in existing_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+        if "attachments" not in existing_postcard_columns:
+            connection.execute("ALTER TABLE postcards ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
         for person, name in PEOPLE.items():
             profile_exists = connection.execute(
                 "SELECT 1 FROM profiles WHERE person = ?", (person,)
@@ -213,7 +241,8 @@ app.add_middleware(
 
 
 class ChatMessage(BaseModel):
-    text: str = Field(min_length=1, max_length=300)
+    text: str = Field(default="", max_length=300)
+    attachments: list[str] = Field(default_factory=list, max_length=4)
 
 
 class LoginRequest(BaseModel):
@@ -234,7 +263,73 @@ class DisplayNameRequest(BaseModel):
 
 
 class PostcardRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=500)
+    text: str = Field(default="", max_length=500)
+    attachments: list[str] = Field(default_factory=list, max_length=1)
+
+
+MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+MAX_CHAT_ATTACHMENTS = 4
+ALLOWED_ATTACHMENT_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+def attachment_metadata(connection, attachment_ids: list[str], person: str, limit: int):
+    ids = list(dict.fromkeys(attachment_ids))
+    if len(ids) > limit:
+        raise HTTPException(status_code=400, detail=f"Attach no more than {limit} files.")
+    if not ids:
+        return []
+    placeholders = ", ".join("?" for _ in ids)
+    rows = connection.execute(
+        f"SELECT id, uploaded_by, filename, content_type, size FROM attachments WHERE id IN ({placeholders})",
+        tuple(ids),
+    ).fetchall()
+    by_id = {row["id"]: row for row in rows}
+    if len(by_id) != len(ids) or any(by_id[item]["uploaded_by"] != person for item in ids):
+        raise HTTPException(status_code=400, detail="One of those files is unavailable. Please attach it again.")
+    return [
+        {
+            "id": row["id"],
+            "name": row["filename"],
+            "content_type": row["content_type"],
+            "size": row["size"],
+        }
+        for row in (by_id[item] for item in ids)
+    ]
+
+
+def valid_attachment_data(extension: str, data: bytes):
+    if extension == ".jpg" or extension == ".jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if extension == ".png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if extension == ".gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if extension == ".webp":
+        return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+    if extension == ".pdf":
+        return data.startswith(b"%PDF-")
+    if extension == ".txt":
+        try:
+            data.decode("utf-8")
+            return b"\x00" not in data
+        except UnicodeDecodeError:
+            return False
+    if extension == ".docx":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as document:
+                return "word/document.xml" in document.namelist()
+        except (OSError, zipfile.BadZipFile):
+            return False
+    return False
 
 
 def hash_phrase(phrase: str, salt: bytes | None = None):
@@ -312,13 +407,14 @@ def serialize_message(row, connection):
         "text": "This message was deleted." if row["deleted_at"] else row["text"],
         "deleted": bool(row["deleted_at"]),
         "ts": int(created_at.timestamp() * 1000),
+        "attachments": json.loads(row["attachments"] or "[]") if not row["deleted_at"] else [],
         "reactions": row.get("reactions", []) if hasattr(row, "get") else [],
     }
 
 
 def message_with_reactions(connection, message_id):
     row = connection.execute(
-        "SELECT id, sender, sender_id, text, created_at, deleted_at FROM messages WHERE id = ?",
+        "SELECT id, sender, sender_id, text, created_at, deleted_at, attachments FROM messages WHERE id = ?",
         (message_id,),
     ).fetchone()
     if not row:
@@ -389,7 +485,7 @@ async def get_postcards(request: Request):
     person = authenticated_person(request)
     with database() as connection:
         rows = connection.execute(
-            "SELECT id, sender_id, recipient_id, text, created_at, reveal_at, opened_at "
+            "SELECT id, sender_id, recipient_id, text, attachments, created_at, reveal_at, opened_at "
             "FROM postcards WHERE (sender_id = ? OR recipient_id = ?) AND opened_at IS NULL "
             "ORDER BY created_at DESC, id DESC LIMIT 100",
             (person, person),
@@ -401,6 +497,7 @@ async def get_postcards(request: Request):
                 "from": profile_name(connection, row["sender_id"]),
                 "to": profile_name(connection, row["recipient_id"]),
                 "text": row["text"] if row["sender_id"] == person else None,
+                "attachments": json.loads(row["attachments"] or "[]") if row["sender_id"] == person else [],
                 "sent": row["sender_id"] == person,
                 "sent_at": row["created_at"],
                 "status": "unread",
@@ -413,20 +510,23 @@ async def create_postcard(payload: PostcardRequest, request: Request):
     sender = authenticated_person(request)
     recipient = "tishu" if sender == "aditya" else "aditya"
     text = payload.text.strip()
-    if not text:
+    if not text and not payload.attachments:
         raise HTTPException(status_code=400, detail="Write a little note before sending.")
     created_at = datetime.now(timezone.utc)
     sent_at = created_at.isoformat()
     with database() as connection:
+        attachments = attachment_metadata(connection, payload.attachments, sender, 1)
+        if any(not item["content_type"].startswith("image/") for item in attachments):
+            raise HTTPException(status_code=400, detail="Letters can include one image.")
         insert_query = (
-            "INSERT INTO postcards (sender_id, recipient_id, text, created_at, reveal_at) "
-            "VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO postcards (sender_id, recipient_id, text, attachments, created_at, reveal_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
         )
         if DATABASE_URL:
             insert_query += " RETURNING id"
         cursor = connection.execute(
             insert_query,
-            (sender, recipient, text, sent_at, sent_at),
+            (sender, recipient, text, json.dumps(attachments), sent_at, sent_at),
         )
         postcard_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
         recipient_name = profile_name(connection, recipient)
@@ -445,7 +545,7 @@ async def open_postcard(postcard_id: int, request: Request):
     with database() as connection:
         lock_clause = " FOR UPDATE" if DATABASE_URL else ""
         row = connection.execute(
-            "SELECT id, sender_id, recipient_id, text, created_at, reveal_at, opened_at "
+            "SELECT id, sender_id, recipient_id, text, attachments, created_at, reveal_at, opened_at "
             f"FROM postcards WHERE id = ?{lock_clause}", (postcard_id,),
         ).fetchone()
         if not row or row["recipient_id"] != person:
@@ -456,6 +556,7 @@ async def open_postcard(postcard_id: int, request: Request):
             "from": profile_name(connection, row["sender_id"]),
             "to": profile_name(connection, row["recipient_id"]),
             "text": row["text"],
+            "attachments": json.loads(row["attachments"] or "[]"),
             "sent": False,
             "opened": True,
             "newly_opened": newly_opened,
@@ -600,6 +701,61 @@ async def get_messages(request: Request):
     return messages
 
 
+@app.post("/api/attachments")
+async def upload_attachment(request: Request, file: UploadFile = File(...)):
+    person = authenticated_person(request)
+    filename = "".join(character for character in (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1] if character.isprintable()).strip()[:120]
+    extension = Path(filename).suffix.lower()
+    content_type = ALLOWED_ATTACHMENT_TYPES.get(extension)
+    if not content_type:
+        raise HTTPException(status_code=415, detail="Choose an image, PDF, text file, or DOCX document.")
+    data = await file.read(MAX_ATTACHMENT_SIZE + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="That file is empty.")
+    if len(data) > MAX_ATTACHMENT_SIZE:
+        raise HTTPException(status_code=413, detail="Each attachment must be 10 MB or smaller.")
+    if not valid_attachment_data(extension, data):
+        raise HTTPException(status_code=415, detail="That file does not match its file type.")
+    attachment_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    with database() as connection:
+        connection.execute(
+            "INSERT INTO attachments (id, uploaded_by, filename, content_type, size, data, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (attachment_id, person, filename or f"attachment{extension}", content_type, len(data), data, created_at),
+        )
+    return {
+        "id": attachment_id,
+        "name": filename or f"attachment{extension}",
+        "content_type": content_type,
+        "size": len(data),
+    }
+
+
+@app.get("/api/attachments/{attachment_id}")
+async def get_attachment(attachment_id: str, request: Request):
+    authenticated_person(request)
+    with database() as connection:
+        row = connection.execute(
+            "SELECT filename, content_type, data FROM attachments WHERE id = ?", (attachment_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="That attachment is no longer available.")
+    disposition = "inline" if row["content_type"].startswith("image/") else "attachment"
+    filename = row["filename"].replace('"', "").replace("\\", "_")
+    fallback_filename = filename.encode("ascii", "ignore").decode("ascii") or "attachment"
+    encoded_filename = quote(row["filename"], safe="")
+    return Response(
+        content=row["data"],
+        media_type=row["content_type"],
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{fallback_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
 @app.delete("/api/messages/{message_id}")
 async def delete_message(message_id: int, request: Request):
     person = authenticated_person(request)
@@ -700,20 +856,24 @@ async def chat_socket(websocket: WebSocket):
                 await websocket.send_json({"type": "error", "message": "That message needs a name and a little less than 300 characters."})
                 continue
             text = message.text.strip()
-            if not text:
+            if not text and not message.attachments:
                 continue
             created_at = datetime.now(timezone.utc).isoformat()
-            with database() as connection:
-                sender_name = profile_name(connection, person)
-                insert_query = "INSERT INTO messages (sender, sender_id, text, created_at) VALUES (?, ?, ?, ?)"
-                if DATABASE_URL:
-                    insert_query += " RETURNING id"
-                cursor = connection.execute(insert_query, (sender_name, person, text, created_at))
-                message_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
-                row = connection.execute(
-                    "SELECT id, sender, sender_id, text, created_at, deleted_at FROM messages WHERE id = ?", (message_id,)
-                ).fetchone()
-                saved_message = message_with_reactions(connection, message_id)
+            try:
+                with database() as connection:
+                    attachments = attachment_metadata(connection, message.attachments, person, MAX_CHAT_ATTACHMENTS)
+                    sender_name = profile_name(connection, person)
+                    insert_query = "INSERT INTO messages (sender, sender_id, text, attachments, created_at) VALUES (?, ?, ?, ?, ?)"
+                    if DATABASE_URL:
+                        insert_query += " RETURNING id"
+                    cursor = connection.execute(
+                        insert_query, (sender_name, person, text, json.dumps(attachments), created_at)
+                    )
+                    message_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
+                    saved_message = message_with_reactions(connection, message_id)
+            except HTTPException as error:
+                await websocket.send_json({"type": "error", "message": error.detail})
+                continue
             await broadcast({"type": "message", "message": saved_message})
     except WebSocketDisconnect:
         pass

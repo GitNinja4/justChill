@@ -3,3 +3,4 @@ uvicorn[standard]>=0.27,<1.0
 websockets>=12,<16
 psycopg[binary]>=3.2,<4.0
 argon2-cffi>=23.1,<26.0
+python-multipart>=0.0.9,<1.0
