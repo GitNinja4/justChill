@@ -418,7 +418,7 @@ async def get_call_config(request: Request):
             "username": turn_username,
             "credential": turn_credential,
         })
-    return {"ice_servers": ice_servers}
+    return {"ice_servers": ice_servers, "has_turn": bool(turn_urls and turn_username and turn_credential)}
 
 
 def city_from_address(address: dict):

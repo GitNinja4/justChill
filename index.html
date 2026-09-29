@@ -172,7 +172,9 @@
   .special p{color:var(--dim); font-size:14px; margin:0 0 16px;}
   .connect-btn{display:inline-flex; align-items:center; gap:8px; background:var(--coral); color:var(--sky1); font-weight:600; font-size:15px;
     padding:13px 24px; border-radius:100px; border:none; cursor:pointer; text-decoration:none;}
-  .call-start-actions{display:flex; justify-content:center; flex-wrap:wrap; gap:9px;}
+  .call-start-actions{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px;}
+  .connect-btn{width:100%; min-height:46px; justify-content:center; padding:10px 12px; border-radius:14px; font-size:13px;}
+  .call-button-icon{font-size:16px; line-height:1;}
   .connect-btn.video-call{background:var(--gold);}
   .connect-btn.history-call{border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.07); color:var(--cream);}
   .call-availability{min-height:16px; margin:12px 0 0 !important; font-size:11px !important;}
@@ -300,11 +302,11 @@
   dialog{max-height:calc(100dvh - 24px); overflow-y:auto;}
   dialog.call-dialog{overflow-y:auto;}
   .call-history-route,.call-history-outcome{min-width:0; overflow-wrap:anywhere;}
-  .call-start-actions > .connect-btn{flex:1 1 190px; min-height:46px;}
+  .call-start-actions > .connect-btn{min-width:0;}
 
   @media (max-width:720px){
     .wrap{width:min(100%,640px);}
-    .call-start-actions > .connect-btn{flex-basis:180px;}
+    .call-start-actions{gap:8px;}
   }
 
   @media (max-width:540px){
@@ -316,7 +318,10 @@
     .letter-notice{align-items:flex-start;}
     .letter-notice > span{min-width:0; overflow-wrap:anywhere;}
     .call-stage{min-height:220px;}
-    .call-start-actions > .connect-btn{flex-basis:100%;}
+    .call-start-actions{grid-template-columns:repeat(2,minmax(0,1fr));}
+    .call-start-actions .history-call{grid-column:1 / -1; width:min(100%,190px); justify-self:center;}
+    .special{padding:20px 14px;}
+    .special p{font-size:13px;}
   }
 
   @media (max-width:380px){
@@ -421,9 +426,9 @@
   <div class="special">
     <p>Some things aren't a text. Call each other right here.</p>
     <div class="call-start-actions">
-      <button class="connect-btn" id="audio-call-start" type="button">Start audio call</button>
-      <button class="connect-btn video-call" id="video-call-start" type="button">Start video call</button>
-      <button class="connect-btn history-call" id="call-history-open" type="button">Call history</button>
+      <button class="connect-btn" id="audio-call-start" type="button"><span class="call-button-icon" aria-hidden="true">◉</span><span>Audio call</span></button>
+      <button class="connect-btn video-call" id="video-call-start" type="button"><span class="call-button-icon" aria-hidden="true">▣</span><span>Video call</span></button>
+      <button class="connect-btn history-call" id="call-history-open" type="button"><span class="call-button-icon" aria-hidden="true">↺</span><span>History</span></button>
     </div>
     <p class="call-availability" id="call-availability" role="status">Audio and video calls stay in this page.</p>
   </div>
@@ -619,6 +624,7 @@
   let chatSocket = null;
   let chatSocketGeneration = 0;
   let callIceServers = [{urls:'stun:stun.l.google.com:19302'}];
+  let callHasTurn = false;
   let activeCall = null;
   let callPeerConnection = null;
   let localCallStream = null;
@@ -2125,6 +2131,8 @@
       setCallAvailability('Calls are not supported in this browser.');
     }else if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
       setCallAvailability('Calls are ready when the chat reconnects.');
+    }else if(!callHasTurn){
+      setCallAvailability('Calls are ready, but restrictive networks may need TURN.');
     }else{
       setCallAvailability('Audio and video calls stay in this page.');
     }
@@ -2138,6 +2146,7 @@
       if(Array.isArray(configuration.ice_servers) && configuration.ice_servers.length){
         callIceServers = configuration.ice_servers;
       }
+      callHasTurn = Boolean(configuration.has_turn);
     }catch(err){}
     updateCallAvailability();
   }
@@ -2345,6 +2354,27 @@
         activeCall.status = 'Connection interrupted…';
         updateCallDialog();
       }
+    };
+    connection.oniceconnectionstatechange = ()=>{
+      if(activeCall?.id !== call.id) return;
+      const iceState = connection.iceConnectionState;
+      if(iceState === 'checking'){
+        activeCall.status = 'Finding a secure connection…';
+      }else if(iceState === 'failed'){
+        activeCall.status = callHasTurn
+          ? 'Network negotiation failed. Try again.'
+          : 'Could not find a network path. TURN is required on this network.';
+      }else if(iceState === 'disconnected' && activeCall.state !== 'active'){
+        activeCall.status = 'The network path was interrupted…';
+      }
+      updateCallDialog();
+    };
+    connection.onicecandidateerror = ()=>{
+      if(activeCall?.id !== call.id) return;
+      activeCall.status = callHasTurn
+        ? 'The network relay reported an error.'
+        : 'No TURN relay is configured for this network.';
+      updateCallDialog();
     };
     return connection;
   }
