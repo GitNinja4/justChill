@@ -203,8 +203,8 @@
   .call-heading{display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px;}
   .call-heading p{margin:0; color:var(--gold); font-size:11px;}
   .call-stage{position:relative; display:grid; place-items:center; min-height:330px; aspect-ratio:16/10; overflow:hidden; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:radial-gradient(ellipse at 50% 40%,#35264b,#100f1d 75%);}
-  .call-remote-video{position:absolute; inset:0; width:100%; height:100%; background:#090910; object-fit:cover;}
-  .call-local-video{position:absolute; z-index:2; top:12px; right:12px; width:min(27%,160px); aspect-ratio:3/4; border:1px solid rgba(255,255,255,.6); border-radius:9px; background:#090910; object-fit:cover; box-shadow:0 5px 18px rgba(0,0,0,.35);}
+  .call-remote-video{position:absolute; inset:0; width:100%; height:100%; background:#090910; object-fit:contain;}
+  .call-local-video{position:absolute; z-index:2; top:12px; right:12px; width:min(27%,160px); aspect-ratio:3/4; border:1px solid rgba(255,255,255,.6); border-radius:9px; background:#090910; object-fit:contain; box-shadow:0 5px 18px rgba(0,0,0,.35);}
   .call-remote-audio{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;}
   .call-placeholder{display:grid; justify-items:center; gap:9px; color:var(--cream); text-align:center;}
   .call-avatar{width:74px; height:74px; display:grid; place-items:center; border:1px solid rgba(239,184,84,.45); border-radius:50%; background:rgba(239,184,84,.1); color:var(--gold); font-size:28px;}
@@ -217,7 +217,7 @@
   .call-control.decline,.call-control.end{border-color:transparent; background:#e65e65; color:#25080b;}
   .call-control:disabled{opacity:.55; cursor:wait;}
   .connect-btn:focus-visible{outline:2px solid var(--gold); outline-offset:3px;}
-  @media (max-width:540px){.call-panel{padding:12px;}.call-stage{min-height:250px;}.call-control{min-height:40px;padding:0 12px;}.call-history{padding:14px;}}
+  @media (max-width:540px){.call-panel{padding:12px;}.call-stage{height:min(52dvh,360px); min-height:220px; aspect-ratio:auto;}.call-control{min-height:40px;padding:0 12px;}.call-history{padding:14px;}}
   footer{text-align:center; color:var(--dim); font-size:11.5px; margin-top:30px; opacity:0.7;}
   .gate{min-height:100%; display:grid; place-items:center; padding:24px;}
   .gate-inner{width:min(100%,420px); padding:30px 26px; border:1px solid rgba(255,255,255,.12); border-radius:18px; background:rgba(19,12,48,.72); box-shadow:0 24px 80px rgba(0,0,0,.24);}
@@ -337,7 +337,7 @@
     .gate{padding:12px;}
     .gate-inner{padding:20px;}
     .call-panel{padding:10px;}
-    .call-stage{min-height:170px;}
+    .call-stage{height:min(48dvh,240px); min-height:170px;}
     .call-status{margin:7px 0;}
   }
 </style>
@@ -630,6 +630,7 @@
   let localCallStream = null;
   let pendingCallCandidates = [];
   let callRingTimer = null;
+  let callConnectTimer = null;
   let callCloseTimer = null;
   let callDurationTimer = null;
   let callConnectedAt = null;
@@ -2249,9 +2250,11 @@
 
   function releaseCallMedia(){
     clearTimeout(callRingTimer);
+    clearTimeout(callConnectTimer);
     clearTimeout(callCloseTimer);
     clearInterval(callDurationTimer);
     callRingTimer = null;
+    callConnectTimer = null;
     callCloseTimer = null;
     callDurationTimer = null;
     callConnectedAt = null;
@@ -2306,6 +2309,17 @@
     finishCall('Call ended.');
   }
 
+  function startCallConnectTimeout(call){
+    clearTimeout(callConnectTimer);
+    callConnectTimer = setTimeout(()=>{
+      if(activeCall?.id !== call.id || activeCall.state === 'active') return;
+      emitCallSignal('hangup', {reason:'connection_timeout'}, call);
+      finishCall(callHasTurn
+        ? 'The call could not connect. Please try again.'
+        : 'The call could not find a network path. Configure TURN and try again.', true);
+    }, 25000);
+  }
+
   function createCallPeerConnection(){
     const call = activeCall;
     const connection = new RTCPeerConnection({iceServers:callIceServers});
@@ -2333,7 +2347,9 @@
       if(activeCall?.id !== call.id) return;
       if(connection.connectionState === 'connected'){
         clearTimeout(callRingTimer);
+        clearTimeout(callConnectTimer);
         callRingTimer = null;
+        callConnectTimer = null;
         emitCallSignal('connected', {}, call);
         activeCall.state = 'active';
         callConnectedAt = Date.now();
@@ -2349,7 +2365,9 @@
         updateCallDialog();
       }else if(connection.connectionState === 'failed'){
         emitCallSignal('hangup', {reason:'connection_lost'}, call);
-        finishCall('Could not connect. Check network access or configure TURN.');
+        finishCall(callHasTurn
+          ? 'The call could not connect. Please try again.'
+          : 'The call could not find a network path. Configure TURN and try again.', true);
       }else if(connection.connectionState === 'disconnected'){
         activeCall.status = 'Connection interrupted…';
         updateCallDialog();
@@ -2442,6 +2460,7 @@
       call.state = 'connecting';
       call.status = 'Connecting…';
       updateCallDialog();
+      startCallConnectTimeout(call);
       if(!emitCallSignal('accept', {}, call)) finishCall('The chat disconnected before you could answer.', true);
     }catch(err){
       emitCallSignal('decline', {reason:'media_unavailable'}, call);
@@ -2493,6 +2512,7 @@
       activeCall.state = 'connecting';
       activeCall.status = 'Connecting…';
       updateCallDialog();
+      startCallConnectTimeout(activeCall);
       try{
         const offer = await callPeerConnection.createOffer();
         await callPeerConnection.setLocalDescription(offer);
