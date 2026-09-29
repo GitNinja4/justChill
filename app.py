@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -39,6 +39,12 @@ ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+CALL_SIGNAL_ACTIONS = {
+    "invite", "accept", "decline", "busy", "cancel", "offer", "answer", "ice", "hangup"
+}
+MAX_CALL_SIGNAL_BYTES = 128 * 1024
+
+
 class DatabaseConnection:
     def __init__(self, connection, is_postgres: bool):
         self.connection = connection
@@ -98,6 +104,7 @@ def initialize_db():
                 id {message_id_type},
                 sender TEXT NOT NULL,
                 sender_id TEXT,
+                client_message_id TEXT,
                 text TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 deleted_at TEXT,
@@ -191,10 +198,16 @@ def initialize_db():
             connection.execute("ALTER TABLE messages ADD COLUMN deleted_by TEXT")
         if "sender_id" not in existing_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN sender_id TEXT")
+        if "client_message_id" not in existing_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN client_message_id TEXT")
         if "attachments" not in existing_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
         if "attachments" not in existing_postcard_columns:
             connection.execute("ALTER TABLE postcards ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_sender_client_id "
+            "ON messages (sender_id, client_message_id) WHERE client_message_id IS NOT NULL"
+        )
         for person, name in PEOPLE.items():
             profile_exists = connection.execute(
                 "SELECT 1 FROM profiles WHERE person = ?", (person,)
@@ -247,6 +260,7 @@ app.add_middleware(
 class ChatMessage(BaseModel):
     text: str = Field(default="", max_length=300)
     attachments: list[str] = Field(default_factory=list, max_length=4)
+    client_id: str | None = Field(default=None, max_length=36)
 
 
 class LoginRequest(BaseModel):
@@ -407,6 +421,7 @@ def serialize_message(row, connection):
     return {
         "id": row["id"],
         "person": sender_id,
+        "client_id": row["client_message_id"],
         "from": profile_name(connection, sender_id) if sender_id in PEOPLE else row["sender"],
         "text": "This message was deleted." if row["deleted_at"] else row["text"],
         "deleted": bool(row["deleted_at"]),
@@ -418,7 +433,7 @@ def serialize_message(row, connection):
 
 def message_with_reactions(connection, message_id):
     row = connection.execute(
-        "SELECT id, sender, sender_id, text, created_at, deleted_at, attachments FROM messages WHERE id = ?",
+        "SELECT id, sender, sender_id, client_message_id, text, created_at, deleted_at, attachments FROM messages WHERE id = ?",
         (message_id,),
     ).fetchone()
     if not row:
@@ -440,18 +455,20 @@ async def home():
     return FileResponse(BASE_DIR / "index.html")
 
 
-@app.get("/api/config")
-async def get_config():
-    numbers = {
-        "aditya": os.getenv("ADITYA_WHATSAPP_NUMBER", "919334823399"),
-        "tishu": os.getenv("TISHU_WHATSAPP_NUMBER", ""),
-    }
-    return {
-        "whatsapp_numbers": {
-            person: "".join(character for character in number if character.isdigit())
-            for person, number in numbers.items()
-        }
-    }
+@app.get("/api/call-config")
+async def get_call_config(request: Request):
+    authenticated_person(request)
+    ice_servers = [{"urls": "stun:stun.l.google.com:19302"}]
+    turn_urls = [url.strip() for url in os.getenv("CALL_TURN_URLS", "").split(",") if url.strip()]
+    turn_username = os.getenv("CALL_TURN_USERNAME", "").strip()
+    turn_credential = os.getenv("CALL_TURN_CREDENTIAL", "").strip()
+    if turn_urls and turn_username and turn_credential:
+        ice_servers.append({
+            "urls": turn_urls,
+            "username": turn_username,
+            "credential": turn_credential,
+        })
+    return {"ice_servers": ice_servers}
 
 
 @app.get("/api/auth/session")
@@ -752,13 +769,32 @@ async def hide_message(message_id: int, request: Request):
 
 
 @app.post("/api/attachments")
-async def upload_attachment(request: Request, file: UploadFile = File(...)):
+async def upload_attachment(request: Request, file: UploadFile = File(...), upload_id: str = Form(...)):
     person = authenticated_person(request)
+    try:
+        upload_id = str(uuid.UUID(upload_id))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise HTTPException(status_code=400, detail="That upload could not be identified. Please try again.") from error
+    attachment_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"aditya-tishu-attachment:{person}:{upload_id}"))
     filename = "".join(character for character in (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1] if character.isprintable()).strip()[:120]
     extension = Path(filename).suffix.lower()
     content_type = ALLOWED_ATTACHMENT_TYPES.get(extension)
     if not content_type:
         raise HTTPException(status_code=415, detail="Choose an image, PDF, text file, or DOCX document.")
+    with database() as connection:
+        existing = connection.execute(
+            "SELECT id, uploaded_by, filename, content_type, size FROM attachments WHERE id = ?",
+            (attachment_id,),
+        ).fetchone()
+    if existing:
+        if existing["uploaded_by"] != person:
+            raise HTTPException(status_code=403, detail="That upload belongs to another account.")
+        return {
+            "id": existing["id"],
+            "name": existing["filename"],
+            "content_type": existing["content_type"],
+            "size": existing["size"],
+        }
     data = await file.read(MAX_ATTACHMENT_SIZE + 1)
     if not data:
         raise HTTPException(status_code=400, detail="That file is empty.")
@@ -766,19 +802,24 @@ async def upload_attachment(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail="Each attachment must be 10 MB or smaller.")
     if not valid_attachment_data(extension, data):
         raise HTTPException(status_code=415, detail="That file does not match its file type.")
-    attachment_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
     with database() as connection:
         connection.execute(
             "INSERT INTO attachments (id, uploaded_by, filename, content_type, size, data, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
             (attachment_id, person, filename or f"attachment{extension}", content_type, len(data), data, created_at),
         )
+        row = connection.execute(
+            "SELECT id, uploaded_by, filename, content_type, size FROM attachments WHERE id = ?",
+            (attachment_id,),
+        ).fetchone()
+        if not row or row["uploaded_by"] != person:
+            raise HTTPException(status_code=409, detail="That upload could not be saved. Please retry.")
     return {
-        "id": attachment_id,
-        "name": filename or f"attachment{extension}",
-        "content_type": content_type,
-        "size": len(data),
+        "id": row["id"],
+        "name": row["filename"],
+        "content_type": row["content_type"],
+        "size": row["size"],
     }
 
 
@@ -889,6 +930,8 @@ async def set_reaction(message_id: int, payload: dict, request: Request):
 
 
 connected_clients: set[WebSocket] = set()
+connected_clients_by_person: dict[str, set[WebSocket]] = {person: set() for person in VALID_PEOPLE}
+active_call_routes: dict[str, dict[str, WebSocket]] = {}
 broadcast_lock = asyncio.Lock()
 
 
@@ -901,6 +944,88 @@ async def broadcast(message: dict):
         for client, result in zip(clients, results):
             if isinstance(result, Exception):
                 connected_clients.discard(client)
+                for person_clients in connected_clients_by_person.values():
+                    person_clients.discard(client)
+
+
+async def relay_call_signal(websocket: WebSocket, person: str, payload: dict):
+    action = payload.get("action")
+    target = payload.get("target")
+    call_id = payload.get("call_id")
+    data = payload.get("data", {})
+    if not isinstance(action, str) or action not in CALL_SIGNAL_ACTIONS or not isinstance(target, str) or target not in VALID_PEOPLE or target == person:
+        await websocket.send_json({"type": "call_error", "message": "That call request is not valid."})
+        return
+    try:
+        call_id = str(uuid.UUID(call_id))
+    except (TypeError, ValueError, AttributeError):
+        await websocket.send_json({"type": "call_error", "message": "That call could not be identified."})
+        return
+    if not isinstance(data, dict) or len(json.dumps(data).encode("utf-8")) > MAX_CALL_SIGNAL_BYTES:
+        await websocket.send_json({"type": "call_error", "message": "That call setup message is too large."})
+        return
+    if action == "invite" and (not isinstance(data.get("mode"), str) or data["mode"] not in {"audio", "video"}):
+        await websocket.send_json({"type": "call_error", "message": "Choose audio or video for the call."})
+        return
+    if action in {"offer", "answer"}:
+        description = data.get("description")
+        if not isinstance(description, dict) or description.get("type") != action or not isinstance(description.get("sdp"), str):
+            await websocket.send_json({"type": "call_error", "message": "That call description is not valid."})
+            return
+    if action == "ice" and data.get("candidate") is not None and not isinstance(data.get("candidate"), dict):
+        await websocket.send_json({"type": "call_error", "message": "That network candidate is not valid."})
+        return
+
+    if action == "invite":
+        if call_id in active_call_routes:
+            await websocket.send_json({"type": "call_error", "message": "That call is already in progress."})
+            return
+        recipients = tuple(connected_clients_by_person[target])
+        if not recipients:
+            await websocket.send_json({"type": "call_signal", "action": "unavailable", "call_id": call_id, "sender": target, "data": {}})
+            return
+        recipient = recipients[0]
+        active_call_routes[call_id] = {person: websocket, target: recipient}
+    else:
+        route = active_call_routes.get(call_id)
+        if not route or route.get(person) is not websocket or target not in route:
+            await websocket.send_json({"type": "call_error", "message": "That call is no longer active."})
+            return
+        recipient = route[target]
+    message = {"type": "call_signal", "action": action, "call_id": call_id, "sender": person, "data": data}
+    try:
+        await recipient.send_json(message)
+    except Exception:
+        connected_clients.discard(recipient)
+        connected_clients_by_person[target].discard(recipient)
+        active_call_routes.pop(call_id, None)
+        if action == "invite":
+            await websocket.send_json({"type": "call_signal", "action": "unavailable", "call_id": call_id, "sender": target, "data": {}})
+        return
+    if action in {"busy", "decline", "cancel", "hangup"}:
+        active_call_routes.pop(call_id, None)
+
+
+async def notify_call_peer_disconnect(websocket: WebSocket, person: str):
+    for call_id, route in list(active_call_routes.items()):
+        if route.get(person) is not websocket:
+            continue
+        active_call_routes.pop(call_id, None)
+        peer_person = "tishu" if person == "aditya" else "aditya"
+        peer = route.get(peer_person)
+        if not peer:
+            continue
+        try:
+            await peer.send_json({
+                "type": "call_signal",
+                "action": "peer_disconnected",
+                "call_id": call_id,
+                "sender": person,
+                "data": {},
+            })
+        except Exception:
+            connected_clients.discard(peer)
+            connected_clients_by_person[peer_person].discard(peer)
 
 
 @app.websocket("/ws/chat")
@@ -911,6 +1036,7 @@ async def chat_socket(websocket: WebSocket):
         await websocket.close(code=4401, reason="Sign in first.")
         return
     connected_clients.add(websocket)
+    connected_clients_by_person[person].add(websocket)
     with database() as connection:
         rows = connection.execute(
             "SELECT id, sender FROM messages "
@@ -926,6 +1052,9 @@ async def chat_socket(websocket: WebSocket):
             if session_person(websocket.cookies.get(SESSION_COOKIE)) != person:
                 await websocket.close(code=4401, reason="Your sign-in has changed.")
                 break
+            if isinstance(payload, dict) and payload.get("type") == "call_signal":
+                await relay_call_signal(websocket, person, payload)
+                continue
             try:
                 message = ChatMessage.model_validate(payload)
             except Exception:
@@ -939,13 +1068,37 @@ async def chat_socket(websocket: WebSocket):
                 with database() as connection:
                     attachments = attachment_metadata(connection, message.attachments, person, MAX_CHAT_ATTACHMENTS)
                     sender_name = profile_name(connection, person)
-                    insert_query = "INSERT INTO messages (sender, sender_id, text, attachments, created_at) VALUES (?, ?, ?, ?, ?)"
-                    if DATABASE_URL:
-                        insert_query += " RETURNING id"
-                    cursor = connection.execute(
-                        insert_query, (sender_name, person, text, json.dumps(attachments), created_at)
-                    )
-                    message_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
+                    existing = None
+                    if message.client_id:
+                        existing = connection.execute(
+                            "SELECT id FROM messages WHERE sender_id = ? AND client_message_id = ?",
+                            (person, message.client_id),
+                        ).fetchone()
+                    if existing:
+                        message_id = existing["id"]
+                    else:
+                        if message.client_id:
+                            insert_query = (
+                                "INSERT INTO messages (sender, sender_id, client_message_id, text, attachments, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+                            )
+                            parameters = (sender_name, person, message.client_id, text, json.dumps(attachments), created_at)
+                        else:
+                            insert_query = "INSERT INTO messages (sender, sender_id, text, attachments, created_at) VALUES (?, ?, ?, ?, ?)"
+                            parameters = (sender_name, person, text, json.dumps(attachments), created_at)
+                        if DATABASE_URL:
+                            insert_query += " RETURNING id"
+                        cursor = connection.execute(insert_query, parameters)
+                        if message.client_id:
+                            saved_row = connection.execute(
+                                "SELECT id FROM messages WHERE sender_id = ? AND client_message_id = ?",
+                                (person, message.client_id),
+                            ).fetchone()
+                            if not saved_row:
+                                raise HTTPException(status_code=409, detail="That message could not be saved. Please retry.")
+                            message_id = saved_row["id"]
+                        else:
+                            message_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
                     saved_message = message_with_reactions(connection, message_id)
             except HTTPException as error:
                 await websocket.send_json({"type": "error", "message": error.detail})
@@ -954,4 +1107,6 @@ async def chat_socket(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
+        await notify_call_peer_disconnect(websocket, person)
         connected_clients.discard(websocket)
+        connected_clients_by_person[person].discard(websocket)

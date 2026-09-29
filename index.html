@@ -15,7 +15,8 @@
     padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
   }
   *{box-sizing:inherit;}
-  html,body{height:100%;margin:0;}
+  html,body{height:100%;margin:0;scrollbar-width:none;-ms-overflow-style:none;}
+  html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;}
   body{
     background:radial-gradient(ellipse at top, var(--sky2), var(--sky1) 60%);
     color:var(--cream); font-family:'Inter',sans-serif; min-height:100%; overflow-x:hidden;
@@ -49,7 +50,7 @@
   .whoami{display:flex; gap:6px;}
   .whoami button{background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); color:var(--dim); border-radius:100px; font-size:12px; padding:5px 12px; cursor:pointer;}
   .whoami button.active{background:var(--gold); color:var(--sky1); border-color:var(--gold); font-weight:600;}
-  .msgs{display:flex; flex-direction:column; gap:8px; height:min(38vh,280px); min-height:160px; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:none; -ms-overflow-style:none; padding:4px 2px 8px; touch-action:pan-y;}
+  .msgs{display:flex; flex-direction:column; gap:8px; height:min(38vh,280px); min-height:160px; overflow-y:auto; scrollbar-width:none; -ms-overflow-style:none; padding:4px 2px 8px; touch-action:pan-y;}
   .msgs::-webkit-scrollbar{display:none;}
   .message-row{position:relative; display:flex; flex:none; align-items:center; width:100%; min-width:0; overflow:hidden; touch-action:pan-y;}
   .message-row.me{justify-content:flex-end;}
@@ -61,13 +62,34 @@
   .message-row.reveal-right .msg{transform:translateX(96px);}
   .msg.me{background:var(--coral); color:var(--sky1); border-bottom-right-radius:4px;}
   .msg.them{background:rgba(255,255,255,0.08); border-bottom-left-radius:4px;}
+  .message-send-state{display:grid; gap:5px; margin-top:8px; font-size:10px;}
+  .message-send-label{opacity:.78; overflow-wrap:anywhere;}
+  .message-send-progress{height:4px; overflow:hidden; border-radius:99px; background:rgba(0,0,0,.16);}
+  .message-send-progress>span{display:block; width:0; height:100%; border-radius:inherit; background:currentColor; transition:width .12s linear;}
+  .message-send-retry{justify-self:start; border:1px solid currentColor; border-radius:6px; padding:4px 8px; background:transparent; color:inherit; font:600 10px 'Inter',sans-serif; cursor:pointer;}
   .message-swipe-action{position:absolute; top:50%; z-index:0; height:34px; border:1px solid rgba(255,157,143,.42); border-radius:8px; padding:0 10px; background:rgba(242,122,107,.16); color:#ffb0a4; font:600 12px 'Inter',sans-serif; opacity:0; visibility:hidden; transform:translateY(-50%); cursor:pointer;}
   .message-swipe-action.left{left:4px;}
   .message-swipe-action.right{right:4px;}
   .message-row.reveal-right .message-swipe-action.left,.message-row.reveal-left .message-swipe-action.right{opacity:1; visibility:visible;}
   .msg.deleted{font-style:italic; opacity:.72;}
+  .msg.image-only{width:fit-content; max-width:78%; padding:0; background:transparent;}
+  .msg.image-only .attachment-list{display:flex; flex-direction:column; align-items:flex-start; max-width:100%; margin-top:0;}
+  .msg.image-only .attachment-list>a{display:block; width:100%; max-width:100%;}
+  .msg.image-only .meta{position:absolute; right:7px; bottom:6px; z-index:2; margin:0; padding:2px 5px; border-radius:10px; background:rgba(0,0,0,.5); color:#fff;}
+  .msg:not(.image-only) .attachment-list{margin-top:10px;}
   .attachment-list{display:grid; gap:7px; margin-top:8px;}
+  .attachment-frame{position:relative; display:grid; place-items:center; width:fit-content; max-width:min(100%,260px); overflow:hidden; border-radius:8px;}
+  .attachment-frame.is-downloading{width:72px; height:72px; background:rgba(0,0,0,.18);}
   .attachment-image{display:block; max-width:min(100%,260px); max-height:220px; border-radius:8px; object-fit:cover;}
+  .attachment-frame.is-uploading .attachment-image{filter:blur(5px) brightness(.72); transform:scale(1.04); transition:filter .18s ease,transform .18s ease;}
+  .image-transfer{--progress:0; position:absolute; z-index:1; width:46px; height:46px; display:grid; place-items:center; border-radius:50%; color:#fff; background:conic-gradient(var(--gold) calc(var(--progress)*1%),rgba(255,255,255,.32) 0); box-shadow:0 2px 10px rgba(0,0,0,.3); pointer-events:none;}
+  .image-transfer::before{content:""; position:absolute; inset:4px; border-radius:inherit; background:rgba(26,18,64,.9);}
+  .image-transfer span{position:relative; font-size:10px; font-weight:600;}
+  .image-transfer[hidden]{display:none;}
+  .image-transfer.indeterminate{background:conic-gradient(from 0deg,rgba(239,184,84,0) 0deg,var(--gold) 285deg,rgba(239,184,84,0) 360deg); animation:image-transfer-spin .8s linear infinite;}
+  .image-transfer.failed{background:var(--coral);}
+  @keyframes image-transfer-spin{to{transform:rotate(1turn);}}
+  @media (prefers-reduced-motion:reduce){.image-transfer.indeterminate{animation:none;}}
   .attachment-doc{display:block; max-width:260px; overflow-wrap:anywhere; border:1px solid rgba(255,255,255,.18); border-radius:8px; padding:9px 10px; color:inherit; font-size:12px; text-decoration:none;}
   .attachment-doc:hover{text-decoration:underline;}
   .reactions{display:flex; gap:4px; flex-wrap:wrap; margin-top:5px;}
@@ -150,10 +172,34 @@
   .special p{color:var(--dim); font-size:14px; margin:0 0 16px;}
   .connect-btn{display:inline-flex; align-items:center; gap:8px; background:var(--coral); color:var(--sky1); font-weight:600; font-size:15px;
     padding:13px 24px; border-radius:100px; border:none; cursor:pointer; text-decoration:none;}
+  .call-start-actions{display:flex; justify-content:center; flex-wrap:wrap; gap:9px;}
+  .connect-btn.video-call{background:var(--gold);}
+  .call-availability{min-height:16px; margin:12px 0 0 !important; font-size:11px !important;}
+  dialog.call-dialog{width:min(calc(100% - 28px),620px); max-height:min(90dvh,760px); overflow:hidden; background:#15132a;}
+  .call-panel{padding:18px;}
+  .call-heading{display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px;}
+  .call-heading p{margin:0; color:var(--gold); font-size:11px;}
+  .call-stage{position:relative; display:grid; place-items:center; min-height:330px; aspect-ratio:16/10; overflow:hidden; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:radial-gradient(ellipse at 50% 40%,#35264b,#100f1d 75%);}
+  .call-remote-video{position:absolute; inset:0; width:100%; height:100%; background:#090910; object-fit:cover;}
+  .call-local-video{position:absolute; z-index:2; top:12px; right:12px; width:min(27%,160px); aspect-ratio:3/4; border:1px solid rgba(255,255,255,.6); border-radius:9px; background:#090910; object-fit:cover; box-shadow:0 5px 18px rgba(0,0,0,.35);}
+  .call-remote-audio{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;}
+  .call-placeholder{display:grid; justify-items:center; gap:9px; color:var(--cream); text-align:center;}
+  .call-avatar{width:74px; height:74px; display:grid; place-items:center; border:1px solid rgba(239,184,84,.45); border-radius:50%; background:rgba(239,184,84,.1); color:var(--gold); font-size:28px;}
+  .call-placeholder strong{font:500 17px 'Fraunces',serif;}
+  .call-status{min-height:20px; margin:12px 0; color:var(--dim); font-size:12px; text-align:center;}
+  .call-incoming-actions,.call-controls{display:flex; justify-content:center; flex-wrap:wrap; gap:8px;}
+  .call-control{min-height:42px; border:1px solid rgba(255,255,255,.15); border-radius:999px; padding:0 15px; background:rgba(255,255,255,.08); color:var(--cream); font:600 12px 'Inter',sans-serif; cursor:pointer;}
+  .call-control:hover,.call-control:focus-visible{background:rgba(255,255,255,.15);}
+  .call-control.answer{border-color:transparent; background:#3aaf75; color:#071e17;}
+  .call-control.decline,.call-control.end{border-color:transparent; background:#e65e65; color:#25080b;}
+  .call-control:disabled{opacity:.55; cursor:wait;}
   .connect-btn:focus-visible{outline:2px solid var(--gold); outline-offset:3px;}
+  @media (max-width:540px){.call-panel{padding:12px;}.call-stage{min-height:250px;}.call-control{min-height:40px;padding:0 12px;}}
   footer{text-align:center; color:var(--dim); font-size:11.5px; margin-top:30px; opacity:0.7;}
   .gate{min-height:100%; display:grid; place-items:center; padding:24px;}
   .gate-inner{width:min(100%,420px); padding:30px 26px; border:1px solid rgba(255,255,255,.12); border-radius:18px; background:rgba(19,12,48,.72); box-shadow:0 24px 80px rgba(0,0,0,.24);}
+  .auth-loading-copy{color:var(--dim); font-size:14px; line-height:1.6; margin:10px 0 0;}
+  .auth-retry{margin-top:14px; background:var(--gold); color:var(--sky1); border:0; border-radius:9px; font:600 14px 'Inter',sans-serif; padding:11px 15px; cursor:pointer;}
   .welcome-screen{position:fixed; inset:0; z-index:5; display:grid; place-items:center; overflow:hidden; padding:24px; background:rgba(10,7,25,.76); backdrop-filter:blur(7px);}
   .welcome-card{position:relative; width:min(100%,460px); padding:48px 28px 34px; border:1px solid rgba(239,184,84,.3); border-radius:18px; background:radial-gradient(ellipse at top, #39275A, #211747 72%); box-shadow:0 26px 90px rgba(0,0,0,.48); text-align:center; animation:welcome-arrive .75s cubic-bezier(.18,.8,.25,1.15) both;}
   .welcome-close{position:absolute; top:10px; right:12px; width:36px; height:36px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.14); border-radius:50%; background:rgba(255,255,255,.06); color:var(--cream); font:400 23px/1 'Inter',sans-serif; cursor:pointer;}
@@ -212,7 +258,16 @@
 </style>
 </head>
 <body>
-<section class="gate" id="login-screen">
+<section class="gate" id="auth-loading" role="status" aria-live="polite">
+  <div class="gate-inner">
+    <p class="gate-kicker">DELHI ↔ SYDNEY · JUST US</p>
+    <h1>Opening your little corner.</h1>
+    <p class="auth-loading-copy" id="auth-loading-copy">Checking your sign-in…</p>
+    <button class="auth-retry" id="auth-retry" type="button" hidden>Try again</button>
+  </div>
+</section>
+
+<section class="gate" id="login-screen" hidden>
   <div class="gate-inner">
     <p class="gate-kicker">DELHI ↔ SYDNEY · JUST US</p>
     <h1>Well, look who found their way back.</h1>
@@ -284,12 +339,44 @@
   </div>
 
   <div class="special">
-    <p>Some things aren't a text. Some things need the actual voice.</p>
-    <a class="connect-btn" id="connect-btn" href="#" target="_blank" rel="noopener">Call Aditya now</a>
+    <p>Some things aren't a text. Call each other right here.</p>
+    <div class="call-start-actions">
+      <button class="connect-btn" id="audio-call-start" type="button">Start audio call</button>
+      <button class="connect-btn video-call" id="video-call-start" type="button">Start video call</button>
+    </div>
+    <p class="call-availability" id="call-availability" role="status">Audio and video calls stay in this page.</p>
   </div>
 
   <footer>matched by chance, staying by choice</footer>
 </main>
+
+<dialog id="call-dialog" class="call-dialog" aria-labelledby="call-peer-name">
+  <div class="call-panel">
+    <div class="call-heading">
+      <p id="call-peer-name">In-app call</p>
+      <p id="call-mode-label">Audio</p>
+    </div>
+    <div class="call-stage" id="call-stage">
+      <div class="call-placeholder" id="call-placeholder">
+        <span class="call-avatar" id="call-avatar" aria-hidden="true">✦</span>
+        <strong id="call-stage-peer">Waiting to connect</strong>
+      </div>
+      <video class="call-remote-video" id="call-remote-video" autoplay playsinline muted hidden></video>
+      <video class="call-local-video" id="call-local-video" autoplay playsinline muted hidden></video>
+      <audio class="call-remote-audio" id="call-remote-audio" autoplay></audio>
+    </div>
+    <p class="call-status" id="call-status" role="status" aria-live="polite"></p>
+    <div class="call-incoming-actions" id="call-incoming-actions" hidden>
+      <button class="call-control answer" id="call-accept" type="button">Answer call</button>
+      <button class="call-control decline" id="call-decline" type="button">Decline</button>
+    </div>
+    <div class="call-controls" id="call-controls" hidden>
+      <button class="call-control" id="call-mute" type="button" aria-pressed="false">Mute mic</button>
+      <button class="call-control" id="call-camera" type="button" aria-pressed="false" hidden>Turn camera off</button>
+      <button class="call-control end" id="call-end" type="button">End call</button>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="postcard-dialog" aria-labelledby="letter-title">
   <div class="flower-shower" id="flower-shower" aria-hidden="true" hidden></div>
@@ -404,8 +491,17 @@
 <script>
   let currentUser = null;
   let signedInPerson = null;
-  let whatsappNumbers = {};
   let chatSocket = null;
+  let chatSocketGeneration = 0;
+  let callIceServers = [{urls:'stun:stun.l.google.com:19302'}];
+  let activeCall = null;
+  let callPeerConnection = null;
+  let localCallStream = null;
+  let pendingCallCandidates = [];
+  let callRingTimer = null;
+  let callCloseTimer = null;
+  let callDurationTimer = null;
+  let callConnectedAt = null;
   let reconnectTimer = null;
   let welcomeTimer = null;
   let lastMessages = [];
@@ -419,7 +515,10 @@
   let postcardCache = [];
   let activeLetter = null;
   let pendingChatFiles = [];
+  let pendingChatMessages = new Map();
+  let messagePreviewUrls = new Map();
   let pendingPostcardFile = null;
+  let pendingPostcardUploadId = null;
   let postcardPreviewUrl = null;
   const heroCopyOptions = [
     {title:'A random hello turned into our favourite part of the day.', subtitle:'One message became a hundred little updates, and somehow that still feels like a good plot twist.'},
@@ -464,37 +563,33 @@
   }
   tick(); setInterval(tick, 15000);
 
-  function updateCallButton(){
-    const button = document.getElementById('connect-btn');
-    const caller = signedInPerson === 'aditya' ? 'Aditya' : 'Tishu';
-    const recipient = signedInPerson === 'aditya' ? 'Tishu' : 'Aditya';
-    const recipientPerson = signedInPerson === 'aditya' ? 'tishu' : 'aditya';
-    const recipientNumber = whatsappNumbers[recipientPerson];
-    button.textContent = `Call ${recipient} now`;
-    if(!recipientNumber){
-      button.removeAttribute('href');
-      button.setAttribute('aria-disabled', 'true');
-      button.title = `Add ${recipient}'s WhatsApp number in the app configuration`;
-      return;
-    }
-    const message = encodeURIComponent(`${caller} here — some things aren't a text. Pick up.`);
-    button.href = `https://wa.me/${recipientNumber}?text=${message}`;
-    button.removeAttribute('aria-disabled');
-    button.removeAttribute('title');
-  }
-
-  fetch('/api/config').then(response=>response.json()).then(config=>{
-    whatsappNumbers = config.whatsapp_numbers || {};
-    if(signedInPerson) updateCallButton();
-  }).catch(()=>{});
-
   // ---------- Sign in and profile ----------
   const loginScreen = document.getElementById('login-screen');
+  const authLoading = document.getElementById('auth-loading');
   const welcomeScreen = document.getElementById('welcome-screen');
   const appScreen = document.getElementById('app');
   const profileDialog = document.getElementById('profile-dialog');
+  let authState = 'loading';
+
+  function showAuthLoading(message='Checking your sign-in…', retry=false){
+    authState = 'loading';
+    loginScreen.hidden = true;
+    appScreen.hidden = true;
+    authLoading.hidden = false;
+    document.getElementById('auth-loading-copy').textContent = message;
+    document.getElementById('auth-retry').hidden = !retry;
+  }
+
+  function showLoginScreen(){
+    authState = 'unauthenticated';
+    authLoading.hidden = true;
+    appScreen.hidden = true;
+    loginScreen.hidden = false;
+  }
 
   function revealApp(){
+    authState = 'authenticated';
+    authLoading.hidden = true;
     loginScreen.hidden = true;
     welcomeScreen.hidden = true;
     appScreen.hidden = false;
@@ -502,7 +597,7 @@
     document.getElementById('profile-name').textContent = currentUser;
     document.getElementById('profile-signed-name').textContent = currentUser;
     document.getElementById('chat-who').textContent = currentUser;
-    updateCallButton();
+    loadCallConfiguration();
     fetch('/api/messages').then(response=>{
       if(!response.ok) throw new Error('Messages could not be loaded');
       return response.json();
@@ -572,6 +667,8 @@
   }
 
   function enterApp(session, celebrateTishu=false){
+    authState = 'authenticated';
+    authLoading.hidden = true;
     signedInPerson = session.person;
     currentUser = session.name;
     if(celebrateTishu && signedInPerson === 'tishu'){
@@ -596,8 +693,11 @@
   });
 
   function leaveApp(){
+    authState = 'unauthenticated';
     signedInPerson = null;
     currentUser = null;
+    if(activeCall) endCurrentCall(false);
+    authLoading.hidden = true;
     clearTimeout(welcomeTimer);
     welcomeTimer = null;
     welcomeScreen.hidden = true;
@@ -680,34 +780,83 @@
     leaveApp();
   });
 
-  fetch('/api/auth/session').then(response=>{
-    if(!response.ok) throw new Error('Sign-in needed');
-    return response.json();
-  }).then(enterApp).catch(()=>{
-    loginScreen.hidden = false;
-    appScreen.hidden = true;
-  });
+  async function initializeAuthSession(){
+    showAuthLoading();
+    try{
+      const response = await fetch('/api/auth/session', {cache:'no-store'});
+      if(response.status === 401){ showLoginScreen(); return; }
+      if(!response.ok) throw new Error('We could not check your sign-in. Try again.');
+      enterApp(await response.json());
+    }catch(err){ showAuthLoading('We could not reach your sign-in service. Check your connection and try again.', true); }
+  }
+
+  document.getElementById('auth-retry').addEventListener('click', initializeAuthSession);
+  initializeAuthSession();
 
   // ---------- Messages ----------
   function renderAttachments(container, attachments){
     if(!attachments || !attachments.length) return;
     const list = document.createElement('div');
     list.className = 'attachment-list';
+    const fitBubbleToImages = ()=>{
+      if(!container.classList.contains('image-only')) return;
+      const frames = Array.from(list.querySelectorAll('.attachment-frame'));
+      const width = Math.ceil(frames.reduce((maximum, frame)=>Math.max(maximum, frame.getBoundingClientRect().width), 0));
+      if(!width) return;
+      container.style.width = `${width}px`;
+      list.style.width = `${width}px`;
+    };
     attachments.forEach(attachment=>{
-      const url = `/api/attachments/${encodeURIComponent(attachment.id)}`;
+      const url = attachment.preview_url || (attachment.id && !attachment.pending ? `/api/attachments/${encodeURIComponent(attachment.id)}` : null);
       if(attachment.content_type.startsWith('image/')){
+        if(!url) return;
         const link = document.createElement('a');
-        link.href = url;
+        const remoteUrl = attachment.id && !attachment.pending ? `/api/attachments/${encodeURIComponent(attachment.id)}` : url;
+        link.href = remoteUrl;
         link.target = '_blank';
         link.rel = 'noopener';
+        const frame = document.createElement('span');
+        frame.className = 'attachment-frame';
         const image = document.createElement('img');
         image.className = 'attachment-image';
-        image.src = url;
         image.alt = attachment.name;
         image.loading = 'lazy';
-        link.appendChild(image);
+        const transfer = document.createElement('span');
+        transfer.className = 'image-transfer';
+        transfer.setAttribute('role', 'progressbar');
+        transfer.setAttribute('aria-valuemin', '0');
+        transfer.setAttribute('aria-valuemax', '100');
+        const transferText = document.createElement('span');
+        transfer.appendChild(transferText);
+        frame.append(image, transfer);
+        const uploading = typeof attachment.uploadProgress === 'number' && Boolean(attachment.preview_url);
+        if(uploading){
+          transfer.dataset.transferMode = 'upload';
+          setUploadImageProgress(transfer, attachment.uploadProgress);
+        }else if(attachment.preview_url){
+          image.addEventListener('load', fitBubbleToImages);
+          image.src = url;
+          const releasePreview = ()=>URL.revokeObjectURL(attachment.preview_url);
+          image.addEventListener('load', releasePreview, {once:true});
+          image.addEventListener('error', releasePreview, {once:true});
+          transfer.hidden = true;
+        }else{
+          frame.classList.add('is-downloading');
+          transfer.classList.add('indeterminate');
+          transferText.hidden = true;
+          transfer.setAttribute('aria-label', 'Downloading image');
+          queueImageDownload(image, remoteUrl, transfer, fitBubbleToImages);
+        }
+        link.appendChild(frame);
         list.appendChild(link);
       }else{
+        if(attachment.pending){
+          const pending = document.createElement('span');
+          pending.className = 'attachment-doc';
+          pending.textContent = attachment.name;
+          list.appendChild(pending);
+          return;
+        }
         const link = document.createElement('a');
         link.className = 'attachment-doc';
         link.href = url;
@@ -717,18 +866,297 @@
       }
     });
     container.appendChild(list);
+    fitBubbleToImages();
+  }
+
+  function setUploadImageProgress(indicator, progress){
+    const percent = Math.max(0, Math.min(100, progress || 0));
+    indicator.hidden = false;
+    indicator.classList.remove('failed');
+    indicator.parentElement.classList.add('is-uploading');
+    indicator.style.setProperty('--progress', String(percent));
+    indicator.setAttribute('aria-label', `Uploading image ${Math.round(percent)}%`);
+    indicator.setAttribute('aria-valuenow', String(Math.round(percent)));
+    indicator.firstElementChild.textContent = `${Math.round(percent)}%`;
+  }
+
+  function setUploadImageFailed(indicator){
+    indicator.parentElement.classList.remove('is-uploading');
+    indicator.classList.add('failed');
+    indicator.setAttribute('aria-label', 'Image upload failed');
+    indicator.removeAttribute('aria-valuenow');
+    indicator.firstElementChild.textContent = '!';
+  }
+
+  function setImageDownloadFailed(indicator){
+    indicator.classList.remove('indeterminate');
+    indicator.classList.add('failed');
+    indicator.setAttribute('aria-label', 'Image download failed');
+    indicator.removeAttribute('aria-valuenow');
+    indicator.firstElementChild.hidden = false;
+    indicator.firstElementChild.textContent = '!';
+  }
+
+  function downloadAttachmentImage(image, url, indicator, onLoaded){
+    const request = new XMLHttpRequest();
+    request.open('GET', url);
+    request.responseType = 'blob';
+    request.timeout = 120000;
+    request.addEventListener('progress', event=>{
+      if(event.lengthComputable){
+        indicator.classList.remove('indeterminate');
+        const percent = Math.round(100 * event.loaded / event.total);
+        indicator.style.setProperty('--progress', String(percent));
+        indicator.setAttribute('aria-label', `Downloading image ${percent}%`);
+        indicator.setAttribute('aria-valuenow', String(percent));
+        indicator.firstElementChild.hidden = false;
+        indicator.firstElementChild.textContent = `${percent}%`;
+      }
+    });
+    request.addEventListener('load', ()=>{
+      if(request.status < 200 || request.status >= 300 || !request.response){
+        setImageDownloadFailed(indicator);
+        return;
+      }
+      indicator.classList.remove('indeterminate');
+      indicator.style.setProperty('--progress', '100');
+      indicator.setAttribute('aria-label', 'Image downloaded');
+      indicator.setAttribute('aria-valuenow', '100');
+      indicator.firstElementChild.hidden = false;
+      indicator.firstElementChild.textContent = '100%';
+      const objectUrl = URL.createObjectURL(request.response);
+      image.addEventListener('load', ()=>{
+        URL.revokeObjectURL(objectUrl);
+        image.parentElement.classList.remove('is-downloading');
+        indicator.hidden = true;
+        onLoaded();
+      }, {once:true});
+      image.addEventListener('error', ()=>{
+        URL.revokeObjectURL(objectUrl);
+        setImageDownloadFailed(indicator);
+      }, {once:true});
+      image.src = objectUrl;
+    });
+    request.addEventListener('error', ()=>setImageDownloadFailed(indicator));
+    request.addEventListener('timeout', ()=>setImageDownloadFailed(indicator));
+    request.send();
+  }
+
+  function queueImageDownload(image, url, indicator, onLoaded){
+    let started = false;
+    const start = ()=>{
+      if(started) return;
+      started = true;
+      downloadAttachmentImage(image, url, indicator, onLoaded);
+    };
+    if('IntersectionObserver' in window){
+      const observer = new IntersectionObserver(entries=>{
+        if(entries.some(entry=>entry.isIntersecting)){
+          observer.disconnect();
+          start();
+        }
+      }, {rootMargin:'120px'});
+      observer.observe(image.parentElement);
+    }else start();
+  }
+
+  function messageWithLocalPreviews(message){
+    const previews = messagePreviewUrls.get(String(message.client_id || message.id));
+    if(!previews || !message.attachments?.length) return message;
+    messagePreviewUrls.delete(String(message.client_id || message.id));
+    return {
+      ...message,
+      attachments:message.attachments.map((attachment,index)=>previews[index] ? {...attachment, preview_url:previews[index]} : attachment)
+    };
+  }
+
+  function pendingUploadLabel(message){
+    if(message.uploadState === 'preparing') return 'Preparing image…';
+    if(message.uploadState === 'uploading') return `Uploading · ${Math.round(message.uploadProgress || 0)}%`;
+    if(message.uploadState === 'sending') return 'Sending…';
+    if(message.uploadState === 'queued') return 'Waiting for chat connection…';
+    return message.uploadError || 'Upload failed.';
+  }
+
+  function updatePendingMessageView(job){
+    const row = messagesBox.querySelector(`[data-client-id="${job.clientId}"]`);
+    if(!row){ renderMessages(lastMessages); return; }
+    const label = row.querySelector('.message-send-label');
+    const progress = row.querySelector('.message-send-progress');
+    if(label) label.textContent = pendingUploadLabel(job.message);
+    row.querySelectorAll('.image-transfer[data-transfer-mode="upload"]').forEach(indicator=>{
+      if(job.message.uploadState === 'failed') setUploadImageFailed(indicator);
+      else setUploadImageProgress(indicator, job.message.uploadProgress);
+    });
+    if(progress){
+      const percent = Math.max(0, Math.min(100, job.message.uploadProgress || 0));
+      progress.setAttribute('aria-valuenow', String(Math.round(percent)));
+      progress.firstElementChild.style.width = `${percent}%`;
+    }
+    const retry = row.querySelector('.message-send-retry');
+    if(job.message.uploadState === 'failed' && !retry){
+      const button = document.createElement('button');
+      button.className = 'message-send-retry';
+      button.type = 'button';
+      button.dataset.retryClientId = job.clientId;
+      button.textContent = 'Retry';
+      row.querySelector('.message-send-state').appendChild(button);
+    }else if(job.message.uploadState !== 'failed' && retry){
+      retry.remove();
+    }
+    if(job.message.uploadState === 'failed' && progress) progress.remove();
+  }
+
+  function sendPendingChatMessage(job){
+    if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
+      job.awaitingAck = false;
+      job.message.uploadState = 'queued';
+      updatePendingMessageView(job);
+      return;
+    }
+    try{
+      job.message.uploadState = 'sending';
+      job.message.uploadLabel = 'Sending…';
+      job.awaitingAck = true;
+      chatSocket.send(JSON.stringify({
+        text:job.text,
+        attachments:job.uploadedAttachments.map(attachment=>attachment.id),
+        client_id:job.clientId
+      }));
+      updatePendingMessageView(job);
+      clearTimeout(job.ackTimer);
+      job.ackTimer = setTimeout(()=>{
+        if(!pendingChatMessages.has(job.clientId) || !job.awaitingAck) return;
+        job.awaitingAck = false;
+        job.message.uploadState = 'failed';
+        job.message.uploadError = 'Message not confirmed. Retry safely.';
+        updatePendingMessageView(job);
+      }, 30000);
+    }catch(err){
+      job.awaitingAck = false;
+      job.message.uploadState = 'queued';
+      updatePendingMessageView(job);
+    }
+  }
+
+  async function processChatUpload(job){
+    if(job.processing) return;
+    job.processing = true;
+    try{
+      if(!job.preparedFiles){
+        job.preparedFiles = new Array(job.files.length);
+      }
+      const totalBytes = job.files.reduce((sum,file)=>sum+file.size,0) || 1;
+      let uploadedBytes = job.uploadedAttachments.reduce((sum,attachment,index)=>sum+(attachment ? job.files[index].size : 0),0);
+      let preparedCount = job.preparedFiles.filter(Boolean).length;
+      const activeBytes = new Array(job.files.length).fill(0);
+      let cursor = 0;
+      const uploadNext = async()=>{
+        while(cursor < job.files.length){
+          const index = cursor++;
+          if(job.uploadedAttachments[index]) continue;
+          if(!job.preparedFiles[index]){
+            job.message.uploadState = 'preparing';
+            job.message.uploadLabel = `Preparing ${preparedCount + 1} of ${job.files.length}…`;
+            updatePendingMessageView(job);
+            job.preparedFiles[index] = await prepareUploadFile(job.files[index]);
+            preparedCount++;
+            job.message.uploadProgress = Math.max(job.message.uploadProgress || 0, 5 * preparedCount / job.files.length);
+          }
+          const prepared = job.preparedFiles[index];
+          job.message.uploadState = 'uploading';
+          job.message.uploadLabel = `Uploading ${index + 1} of ${job.files.length}…`;
+          const attachment = await uploadAttachment(prepared, job.uploadIds[index], (loaded,total)=>{
+            activeBytes[index] = job.files[index].size * Math.min(1, loaded / (total || prepared.size));
+            job.message.uploadProgress = 5 + 90 * (uploadedBytes + activeBytes.reduce((sum,value)=>sum+value,0)) / totalBytes;
+            job.message.uploadLabel = `Uploading · ${Math.min(100, Math.round(job.message.uploadProgress))}%`;
+            updatePendingMessageView(job);
+          });
+          job.uploadedAttachments[index] = attachment;
+          uploadedBytes += job.files[index].size;
+          activeBytes[index] = 0;
+        }
+      };
+      const uploadResults = await Promise.allSettled(Array.from({length:Math.min(2,job.files.length)}, uploadNext));
+      const failedUpload = uploadResults.find(result=>result.status === 'rejected');
+      if(failedUpload) throw failedUpload.reason;
+      job.uploadDone = true;
+      job.message.attachments = job.uploadedAttachments.map((attachment,index)=>({
+        ...attachment,
+        pending:false,
+        preview_url:job.previewUrls[index] || null
+      }));
+      job.message.uploadState = 'queued';
+      job.message.uploadProgress = 95;
+      sendPendingChatMessage(job);
+    }catch(err){
+      job.message.uploadState = 'failed';
+      job.message.uploadError = err.message || 'Upload failed. Retry this message.';
+      updatePendingMessageView(job);
+    }finally{ job.processing = false; }
+  }
+
+  function createPendingChatMessage(text, files){
+    const clientId = crypto.randomUUID();
+    const previewUrls = files.map(file=>file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+    const uploadIds = files.map(()=>crypto.randomUUID());
+    messagePreviewUrls.set(clientId, previewUrls);
+    const message = {
+      id:`pending-${clientId}`,
+      client_id:clientId,
+      person:signedInPerson,
+      from:currentUser,
+      text,
+      deleted:false,
+      ts:Date.now(),
+      reactions:[],
+      attachments:files.map((file,index)=>({
+        id:`pending-${clientId}-${index}`,
+        name:file.name,
+        content_type:file.type || '',
+        size:file.size,
+        pending:true,
+        preview_url:previewUrls[index]
+      })),
+      pending:true,
+      uploadState:'preparing',
+      uploadProgress:0,
+      uploadLabel:'Preparing attachments…'
+    };
+    const job = {clientId,text,files,uploadIds,previewUrls,preparedFiles:null,uploadedAttachments:new Array(files.length),uploadDone:false,awaitingAck:false,processing:false,message};
+    pendingChatMessages.set(clientId, job);
+    renderMessages(lastMessages);
+    processChatUpload(job);
+    return job;
+  }
+
+  function retryPendingChatMessage(clientId){
+    const job = pendingChatMessages.get(clientId);
+    if(!job || job.processing) return;
+    job.message.uploadState = job.uploadDone ? 'queued' : 'preparing';
+    job.message.uploadProgress = job.uploadDone ? 95 : 0;
+    job.message.uploadError = '';
+    if(job.uploadDone) sendPendingChatMessage(job);
+    else processChatUpload(job);
+    updatePendingMessageView(job);
   }
 
   function renderMessages(list){
-    lastMessages = list;
+    const confirmedMessages = list.filter(message=>!message.pending);
+    const confirmedClientIds = new Set(confirmedMessages.map(message=>message.client_id).filter(Boolean).map(String));
+    confirmedClientIds.forEach(clientId=>pendingChatMessages.delete(clientId));
+    lastMessages = confirmedMessages.map(messageWithLocalPreviews);
+    const pendingMessages = Array.from(pendingChatMessages.values(), job=>job.message);
+    const displayMessages = [...lastMessages, ...pendingMessages];
     const box = document.getElementById('msgs');
-    if(!list.length){ box.innerHTML = ''; return; }
+    if(!displayMessages.length){ box.innerHTML = ''; return; }
     box.innerHTML = '';
-    list.forEach(m=>{
+    displayMessages.forEach(m=>{
       const row = document.createElement('div');
       row.className = `message-row ${m.person === signedInPerson ? 'me' : 'them'}`;
       row.dataset.messageId = m.id;
-      if(!m.deleted){
+      if(m.client_id) row.dataset.clientId = m.client_id;
+      if(!m.deleted && !m.pending){
         ['left','right'].forEach(direction=>{
           const action = document.createElement('button');
           action.type = 'button';
@@ -740,7 +1168,8 @@
         });
       }
       const div = document.createElement('div');
-      div.className = 'msg ' + (m.person === signedInPerson ? 'me' : 'them') + (m.deleted ? ' deleted' : '');
+      const imageOnly = !m.text && m.attachments?.some(attachment=>attachment.content_type?.startsWith('image/'));
+      div.className = 'msg ' + (m.person === signedInPerson ? 'me' : 'them') + (m.deleted ? ' deleted' : '') + (imageOnly ? ' image-only' : '');
       div.dataset.messageId = m.id;
       if(m.text){
         const textSpan = document.createElement('span');
@@ -749,8 +1178,38 @@
       }
       const meta = document.createElement('span');
       meta.className = 'meta';
-      meta.textContent = m.from + (m.ts ? ' · ' + new Date(m.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '');
-      renderAttachments(div, m.attachments);
+      const messageTime = m.ts ? new Date(m.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+      meta.textContent = messageTime;
+      const attachments = m.pending ? m.attachments.map(attachment=>({...attachment, uploadProgress:m.uploadProgress})) : m.attachments;
+      renderAttachments(div, attachments);
+      if(m.pending){
+        const state = document.createElement('div');
+        state.className = 'message-send-state';
+        const label = document.createElement('span');
+        label.className = 'message-send-label';
+        label.textContent = pendingUploadLabel(m);
+        state.appendChild(label);
+        if(m.uploadState !== 'failed'){
+          const progress = document.createElement('div');
+          progress.className = 'message-send-progress';
+          progress.setAttribute('role', 'progressbar');
+          progress.setAttribute('aria-valuemin', '0');
+          progress.setAttribute('aria-valuemax', '100');
+          progress.setAttribute('aria-valuenow', String(Math.round(m.uploadProgress || 0)));
+          const fill = document.createElement('span');
+          fill.style.width = `${Math.max(0, Math.min(100, m.uploadProgress || 0))}%`;
+          progress.appendChild(fill);
+          state.appendChild(progress);
+        }else{
+          const retry = document.createElement('button');
+          retry.className = 'message-send-retry';
+          retry.type = 'button';
+          retry.dataset.retryClientId = m.client_id;
+          retry.textContent = 'Retry';
+          state.appendChild(retry);
+        }
+        div.appendChild(state);
+      }
       div.appendChild(meta);
       if(m.reactions && m.reactions.length){
         const reactions = document.createElement('div');
@@ -968,6 +1427,7 @@
     }
     if(postcardPreviewUrl) URL.revokeObjectURL(postcardPreviewUrl);
     pendingPostcardFile = file;
+    pendingPostcardUploadId = file ? crypto.randomUUID() : null;
     document.getElementById('postcard-file-name').textContent = file ? file.name : '';
     const preview = document.getElementById('postcard-file-preview');
     if(file){
@@ -980,13 +1440,79 @@
     }
   });
 
-  async function uploadAttachment(file){
-    const formData = new FormData();
-    formData.append('file', file);
-    const response = await fetch('/api/attachments', {method:'POST', body:formData});
-    const result = await response.json();
-    if(!response.ok) throw new Error(result.detail || 'That file could not be uploaded.');
-    return result;
+  let supportsWebP = null;
+
+  function canvasSupportsWebP(){
+    if(supportsWebP !== null) return supportsWebP;
+    try{ supportsWebP = document.createElement('canvas').toDataURL('image/webp').startsWith('data:image/webp'); }
+    catch(err){ supportsWebP = false; }
+    return supportsWebP;
+  }
+
+  async function prepareUploadFile(file){
+    const passthrough = {data:file, filename:file.name, size:file.size};
+    if(!file.type.startsWith('image/') || file.type === 'image/gif' || file.size <= 1.5 * 1024 * 1024 || !window.createImageBitmap){
+      return passthrough;
+    }
+    let bitmap;
+    try{ bitmap = await createImageBitmap(file, {imageOrientation:'from-image'}); }
+    catch(err){
+      try{ bitmap = await createImageBitmap(file); }catch(decodeError){ return passthrough; }
+    }
+    try{
+      const scale = Math.min(1, 1920 / Math.max(bitmap.width, bitmap.height));
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const outputType = canvasSupportsWebP() ? 'image/webp' : (file.type === 'image/png' ? 'image/png' : 'image/jpeg');
+      let blob;
+      if(typeof OffscreenCanvas !== 'undefined'){
+        const canvas = new OffscreenCanvas(width, height);
+        const context = canvas.getContext('2d');
+        if(!context) return passthrough;
+        context.drawImage(bitmap, 0, 0, width, height);
+        blob = await canvas.convertToBlob({type:outputType, quality:0.86});
+        if(blob.size > 2.2 * 1024 * 1024 && outputType !== 'image/png'){
+          blob = await canvas.convertToBlob({type:outputType, quality:0.78});
+        }
+      }else{
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if(!context) return passthrough;
+        context.drawImage(bitmap, 0, 0, width, height);
+        const encode = quality=>new Promise(resolve=>canvas.toBlob(resolve, outputType, quality));
+        blob = await encode(0.86);
+        if(blob && blob.size > 2.2 * 1024 * 1024 && outputType !== 'image/png') blob = await encode(0.78);
+      }
+      if(!blob || (scale >= 1 && blob.size >= file.size)) return passthrough;
+      const filename = outputType === 'image/webp' ? file.name.replace(/\.[^.]+$/, '.webp') : file.name;
+      return {data:blob, filename, size:blob.size};
+    }catch(err){ return passthrough; }
+    finally{ bitmap.close(); }
+  }
+
+  function uploadAttachment(prepared, uploadId=crypto.randomUUID(), onProgress=()=>{}){
+    return new Promise((resolve,reject)=>{
+      const formData = new FormData();
+      formData.append('upload_id', uploadId);
+      formData.append('file', prepared.data, prepared.filename);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/attachments');
+      xhr.upload.addEventListener('progress', event=>{
+        if(event.lengthComputable) onProgress(event.loaded, event.total);
+      });
+      xhr.addEventListener('load', ()=>{
+        let result = {};
+        try{ result = JSON.parse(xhr.responseText || '{}'); }catch(err){}
+        if(xhr.status >= 200 && xhr.status < 300) resolve(result);
+        else reject(new Error(result.detail || 'That file could not be uploaded.'));
+      });
+      xhr.addEventListener('error', ()=>reject(new Error('Network error while uploading. Retry this message.')));
+      xhr.addEventListener('timeout', ()=>reject(new Error('Upload timed out. Retry this message.')));
+      xhr.timeout = 120000;
+      xhr.send(formData);
+    });
   }
 
   document.getElementById('postcard-form').addEventListener('submit', async event=>{
@@ -999,7 +1525,9 @@
     if(!text && !pendingPostcardFile){ status.textContent = 'Write a note or add a photo first.'; return; }
     button.disabled = true;
     try{
-      const attachments = pendingPostcardFile ? [await uploadAttachment(pendingPostcardFile)] : [];
+      const attachments = pendingPostcardFile
+        ? [await uploadAttachment(await prepareUploadFile(pendingPostcardFile), pendingPostcardUploadId)]
+        : [];
       const response = await fetch('/api/postcards', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({text, attachments:attachments.map(attachment=>attachment.id)})
@@ -1008,6 +1536,7 @@
       if(!response.ok) throw new Error(result.detail || 'Your letter could not be sealed.');
       form.reset();
       pendingPostcardFile = null;
+      pendingPostcardUploadId = null;
       document.getElementById('postcard-file-input').value = '';
       document.getElementById('postcard-file-name').textContent = '';
       document.getElementById('postcard-file-preview').hidden = true;
@@ -1047,42 +1576,51 @@
     const error = document.getElementById('sync-note');
     const selected = Array.from(event.target.files || []);
     event.target.value = '';
-    if(pendingChatFiles.length + selected.length > 4){
+    const signature = file=>`${file.name}\u0000${file.size}\u0000${file.lastModified}\u0000${file.type}`;
+    const known = new Set(pendingChatFiles.map(signature));
+    const uniqueSelected = selected.filter(file=>{
+      const key = signature(file);
+      if(known.has(key)) return false;
+      known.add(key);
+      return true;
+    });
+    if(pendingChatFiles.length + uniqueSelected.length > 4){
       error.textContent = 'Choose up to four files for one message.';
       return;
     }
-    const tooLarge = selected.find(file=>file.size > 10 * 1024 * 1024);
+    const tooLarge = uniqueSelected.find(file=>file.size > 10 * 1024 * 1024);
     if(tooLarge){
       error.textContent = `${tooLarge.name} is over the 10 MB limit.`;
       return;
     }
-    pendingChatFiles.push(...selected);
+    pendingChatFiles.push(...uniqueSelected);
     error.textContent = 'connected ✦ the dramatic voice is live';
     renderPendingChatFiles();
   });
 
-  async function sendMessage(){
+  function sendMessage(){
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if(!text && !pendingChatFiles.length) return;
+    if(pendingChatFiles.length){
+      const files = pendingChatFiles.slice();
+      pendingChatFiles = [];
+      input.value = '';
+      renderPendingChatFiles();
+      createPendingChatMessage(text, files);
+      document.getElementById('sync-note').textContent = 'Preparing your message…';
+      return;
+    }
     if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
       document.getElementById('sync-note').textContent = 'chat is reconnecting; your message is still here';
       return;
     }
-    const button = document.getElementById('msg-send');
     const note = document.getElementById('sync-note');
-    button.disabled = true;
     try{
-      const attachments = [];
-      for(const file of pendingChatFiles) attachments.push(await uploadAttachment(file));
-      if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN) throw new Error('Chat reconnected; press Send again.');
-      chatSocket.send(JSON.stringify({text, attachments:attachments.map(attachment=>attachment.id)}));
+      chatSocket.send(JSON.stringify({text, attachments:[], client_id:crypto.randomUUID()}));
       input.value = '';
-      pendingChatFiles = [];
-      renderPendingChatFiles();
       note.textContent = 'connected ✦ the dramatic voice is live';
     }catch(err){ note.textContent = err.message || 'That message could not be sent.'; }
-    finally{ button.disabled = false; }
   }
   document.getElementById('msg-send').addEventListener('click', sendMessage);
   document.getElementById('msg-input').addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });
@@ -1188,6 +1726,11 @@
   });
 
   messagesBox.addEventListener('click', event=>{
+    const retryButton = event.target.closest('button[data-retry-client-id]');
+    if(retryButton){
+      retryPendingChatMessage(retryButton.dataset.retryClientId);
+      return;
+    }
     const button = event.target.closest('button[data-message-action="open-delete"]');
     const row = button && button.closest('.message-row');
     if(row) openMessageDeleteDialog(row.dataset.messageId);
@@ -1279,17 +1822,376 @@
     if(event.key === 'Escape') closeMessageMenu();
   });
 
+  function callPeerName(person){
+    const knownMessage = lastMessages.find(message=>message.person === person && message.from);
+    return knownMessage?.from || (person === 'aditya' ? 'Aditya' : 'Tishu');
+  }
+
+  function setCallAvailability(message){
+    document.getElementById('call-availability').textContent = message;
+  }
+
+  function updateCallAvailability(){
+    if(!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection){
+      setCallAvailability('Calls are not supported in this browser.');
+    }else if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
+      setCallAvailability('Calls are ready when the chat reconnects.');
+    }else{
+      setCallAvailability('Audio and video calls stay in this page.');
+    }
+  }
+
+  async function loadCallConfiguration(){
+    try{
+      const response = await fetch('/api/call-config', {cache:'no-store'});
+      if(!response.ok) throw new Error('Call settings are unavailable.');
+      const configuration = await response.json();
+      if(Array.isArray(configuration.ice_servers) && configuration.ice_servers.length){
+        callIceServers = configuration.ice_servers;
+      }
+    }catch(err){}
+    updateCallAvailability();
+  }
+
+  function updateCallDialog(){
+    if(!activeCall) return;
+    const incoming = activeCall.direction === 'incoming' && activeCall.state === 'incoming';
+    const peerName = callPeerName(activeCall.peer);
+    document.getElementById('call-peer-name').textContent = `${activeCall.mode === 'video' ? 'Video' : 'Audio'} call`;
+    document.getElementById('call-mode-label').textContent = activeCall.mode === 'video' ? 'VIDEO' : 'AUDIO';
+    document.getElementById('call-stage-peer').textContent = incoming ? `${peerName} is calling` : peerName;
+    document.getElementById('call-avatar').textContent = peerName.slice(0, 1).toUpperCase();
+    document.getElementById('call-status').textContent = activeCall.status || '';
+    document.getElementById('call-incoming-actions').hidden = !incoming;
+    document.getElementById('call-controls').hidden = incoming || activeCall.state === 'finished';
+    const muteButton = document.getElementById('call-mute');
+    muteButton.disabled = !localCallStream?.getAudioTracks().length;
+    const cameraButton = document.getElementById('call-camera');
+    cameraButton.hidden = activeCall.mode !== 'video';
+    cameraButton.disabled = !localCallStream?.getVideoTracks().length;
+    document.getElementById('call-end').textContent = activeCall.state === 'ringing' || activeCall.state === 'permission' ? 'Cancel call' : 'End call';
+    const localVideo = document.getElementById('call-local-video');
+    localVideo.hidden = activeCall.mode !== 'video' || !localCallStream?.getVideoTracks().length;
+  }
+
+  function emitCallSignal(action, data={}, call=activeCall){
+    if(!call || !chatSocket || chatSocket.readyState !== WebSocket.OPEN) return false;
+    try{
+      chatSocket.send(JSON.stringify({type:'call_signal', action, target:call.peer, call_id:call.id, data}));
+      return true;
+    }catch(err){ return false; }
+  }
+
+  function releaseCallMedia(){
+    clearTimeout(callRingTimer);
+    clearTimeout(callCloseTimer);
+    clearInterval(callDurationTimer);
+    callRingTimer = null;
+    callCloseTimer = null;
+    callDurationTimer = null;
+    callConnectedAt = null;
+    if(callPeerConnection){
+      callPeerConnection.onicecandidate = null;
+      callPeerConnection.ontrack = null;
+      callPeerConnection.onconnectionstatechange = null;
+      callPeerConnection.close();
+      callPeerConnection = null;
+    }
+    if(localCallStream){
+      localCallStream.getTracks().forEach(track=>track.stop());
+      localCallStream = null;
+    }
+    document.getElementById('call-local-video').srcObject = null;
+    document.getElementById('call-remote-video').srcObject = null;
+    document.getElementById('call-remote-video').hidden = true;
+    document.getElementById('call-remote-audio').srcObject = null;
+    document.getElementById('call-placeholder').hidden = false;
+    document.getElementById('call-mute').setAttribute('aria-pressed', 'false');
+    document.getElementById('call-mute').textContent = 'Mute mic';
+    document.getElementById('call-camera').setAttribute('aria-pressed', 'false');
+    document.getElementById('call-camera').textContent = 'Turn camera off';
+    pendingCallCandidates = [];
+  }
+
+  function finishCall(message='', showMessage=false){
+    releaseCallMedia();
+    activeCall = null;
+    const dialog = document.getElementById('call-dialog');
+    if(showMessage && dialog.open){
+      document.getElementById('call-status').textContent = message;
+      document.getElementById('call-incoming-actions').hidden = true;
+      document.getElementById('call-controls').hidden = true;
+      callCloseTimer = setTimeout(()=>{ if(dialog.open) dialog.close(); }, 1800);
+    }else if(dialog.open){
+      dialog.close();
+    }
+    if(message) setCallAvailability(message);
+    else updateCallAvailability();
+  }
+
+  function endCurrentCall(sendSignal=true){
+    if(!activeCall){ finishCall(); return; }
+    if(sendSignal){
+      const action = activeCall.direction === 'incoming' && activeCall.state === 'incoming'
+        ? 'decline'
+        : activeCall.state === 'ringing' || activeCall.state === 'permission' ? 'cancel' : 'hangup';
+      emitCallSignal(action);
+    }
+    finishCall('Call ended.');
+  }
+
+  function createCallPeerConnection(){
+    const call = activeCall;
+    const connection = new RTCPeerConnection({iceServers:callIceServers});
+    callPeerConnection = connection;
+    localCallStream.getTracks().forEach(track=>connection.addTrack(track, localCallStream));
+    connection.onicecandidate = event=>{
+      if(event.candidate && activeCall?.id === call.id){
+        emitCallSignal('ice', {candidate:event.candidate.toJSON()}, call);
+      }
+    };
+    connection.ontrack = event=>{
+      if(activeCall?.id !== call.id) return;
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      document.getElementById('call-remote-audio').srcObject = stream;
+      document.getElementById('call-remote-audio').play().catch(()=>{});
+      if(event.track.kind === 'video' && call.mode === 'video'){
+        const video = document.getElementById('call-remote-video');
+        video.srcObject = stream;
+        video.hidden = false;
+        document.getElementById('call-placeholder').hidden = true;
+        video.play().catch(()=>{});
+      }
+    };
+    connection.onconnectionstatechange = ()=>{
+      if(activeCall?.id !== call.id) return;
+      if(connection.connectionState === 'connected'){
+        clearTimeout(callRingTimer);
+        callRingTimer = null;
+        activeCall.state = 'active';
+        callConnectedAt = Date.now();
+        const updateDuration = ()=>{
+          if(!activeCall || !callConnectedAt) return;
+          const seconds = Math.floor((Date.now()-callConnectedAt)/1000);
+          const minutes = String(Math.floor(seconds/60)).padStart(2,'0');
+          activeCall.status = `Connected · ${minutes}:${String(seconds%60).padStart(2,'0')}`;
+          updateCallDialog();
+        };
+        updateDuration();
+        callDurationTimer = setInterval(updateDuration, 1000);
+        updateCallDialog();
+      }else if(connection.connectionState === 'failed'){
+        emitCallSignal('hangup', {}, call);
+        finishCall('Could not connect. Check network access or configure TURN.');
+      }else if(connection.connectionState === 'disconnected'){
+        activeCall.status = 'Connection interrupted…';
+        updateCallDialog();
+      }
+    };
+    return connection;
+  }
+
+  async function startCall(mode){
+    if(activeCall) return;
+    if(!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection){
+      setCallAvailability('Calls are not supported in this browser.');
+      return;
+    }
+    if(!chatSocket || chatSocket.readyState !== WebSocket.OPEN){
+      setCallAvailability('The chat is reconnecting. Try your call again in a moment.');
+      return;
+    }
+    const call = {
+      id:crypto.randomUUID(),
+      peer:signedInPerson === 'aditya' ? 'tishu' : 'aditya',
+      mode,
+      direction:'outgoing',
+      state:'permission',
+      status:'Allow microphone access to start your call.'
+    };
+    activeCall = call;
+    pendingCallCandidates = [];
+    const dialog = document.getElementById('call-dialog');
+    if(!dialog.open) dialog.showModal();
+    updateCallDialog();
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true, video:mode === 'video'});
+      if(activeCall?.id !== call.id){ stream.getTracks().forEach(track=>track.stop()); return; }
+      localCallStream = stream;
+      document.getElementById('call-local-video').srcObject = stream;
+      createCallPeerConnection();
+      call.state = 'ringing';
+      call.status = `Calling ${callPeerName(call.peer)}…`;
+      updateCallDialog();
+      if(!emitCallSignal('invite', {mode}, call)){
+        finishCall('The chat disconnected before the call could start.', true);
+        return;
+      }
+      callRingTimer = setTimeout(()=>{
+        if(activeCall?.id !== call.id) return;
+        emitCallSignal('cancel', {}, call);
+        finishCall('No answer. You can try again later.', true);
+      }, 45000);
+    }catch(err){
+      finishCall(err.name === 'NotAllowedError' ? 'Allow microphone and camera access to make this call.' : 'Could not start the call on this device.', true);
+    }
+  }
+
+  async function acceptIncomingCall(){
+    const call = activeCall;
+    if(!call || call.direction !== 'incoming' || call.state !== 'incoming') return;
+    clearTimeout(callRingTimer);
+    callRingTimer = null;
+    call.state = 'permission';
+    call.status = 'Allow microphone access to answer.';
+    updateCallDialog();
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true, video:call.mode === 'video'});
+      if(activeCall?.id !== call.id){ stream.getTracks().forEach(track=>track.stop()); return; }
+      localCallStream = stream;
+      document.getElementById('call-local-video').srcObject = stream;
+      createCallPeerConnection();
+      call.state = 'connecting';
+      call.status = 'Connecting…';
+      updateCallDialog();
+      if(!emitCallSignal('accept', {}, call)) finishCall('The chat disconnected before you could answer.', true);
+    }catch(err){
+      emitCallSignal('decline', {reason:'media_unavailable'}, call);
+      finishCall(err.name === 'NotAllowedError' ? 'Allow microphone and camera access to answer.' : 'Could not access this device.', true);
+    }
+  }
+
+  async function flushCallCandidates(){
+    if(!callPeerConnection?.remoteDescription) return;
+    const candidates = pendingCallCandidates.splice(0);
+    for(const candidate of candidates){
+      try{ await callPeerConnection.addIceCandidate(new RTCIceCandidate(candidate)); }catch(err){}
+    }
+  }
+
+  async function handleCallSignal(payload){
+    const {action, call_id:callId, sender, data={}} = payload;
+    if(action === 'invite'){
+      if(sender === signedInPerson || !['audio','video'].includes(data.mode)) return;
+      if(activeCall){
+        emitCallSignal('busy', {}, {id:callId,peer:sender});
+        return;
+      }
+      clearTimeout(callCloseTimer);
+      callCloseTimer = null;
+      activeCall = {id:callId, peer:sender, mode:data.mode, direction:'incoming', state:'incoming', status:`Incoming call from ${callPeerName(sender)}.`};
+      pendingCallCandidates = [];
+      const dialog = document.getElementById('call-dialog');
+      if(!dialog.open) dialog.showModal();
+      updateCallDialog();
+      callRingTimer = setTimeout(()=>{
+        if(activeCall?.id !== callId) return;
+        emitCallSignal('decline', {reason:'no_answer'});
+        finishCall('Missed call.', true);
+      }, 45000);
+      return;
+    }
+    if(!activeCall || activeCall.id !== callId || activeCall.peer !== sender) return;
+    if(action === 'unavailable'){
+      finishCall(`${callPeerName(sender)} is not online for a call right now.`, true);
+    }else if(action === 'busy'){
+      finishCall(`${callPeerName(sender)} is already on a call.`, true);
+    }else if(action === 'decline'){
+      finishCall('Call declined.', true);
+    }else if(action === 'cancel' || action === 'hangup' || action === 'peer_disconnected'){
+      finishCall('Call ended.', true);
+    }else if(action === 'accept' && activeCall.direction === 'outgoing'){
+      clearTimeout(callRingTimer);
+      activeCall.state = 'connecting';
+      activeCall.status = 'Connecting…';
+      updateCallDialog();
+      try{
+        const offer = await callPeerConnection.createOffer();
+        await callPeerConnection.setLocalDescription(offer);
+        emitCallSignal('offer', {description:callPeerConnection.localDescription.toJSON()});
+      }catch(err){
+        emitCallSignal('hangup');
+        finishCall('Could not prepare the call connection.', true);
+      }
+    }else if(action === 'offer' && activeCall.direction === 'incoming'){
+      try{
+        await callPeerConnection.setRemoteDescription(new RTCSessionDescription(data.description));
+        await flushCallCandidates();
+        const answer = await callPeerConnection.createAnswer();
+        await callPeerConnection.setLocalDescription(answer);
+        emitCallSignal('answer', {description:callPeerConnection.localDescription.toJSON()});
+      }catch(err){
+        emitCallSignal('hangup');
+        finishCall('Could not answer the call connection.', true);
+      }
+    }else if(action === 'answer' && activeCall.direction === 'outgoing'){
+      try{
+        await callPeerConnection.setRemoteDescription(new RTCSessionDescription(data.description));
+        await flushCallCandidates();
+      }catch(err){
+        emitCallSignal('hangup');
+        finishCall('Could not complete the call connection.', true);
+      }
+    }else if(action === 'ice' && data.candidate && callPeerConnection){
+      if(!callPeerConnection.remoteDescription){
+        pendingCallCandidates.push(data.candidate);
+      }else{
+        try{ await callPeerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); }catch(err){}
+      }
+    }
+  }
+
+  document.getElementById('audio-call-start').addEventListener('click', ()=>startCall('audio'));
+  document.getElementById('video-call-start').addEventListener('click', ()=>startCall('video'));
+  document.getElementById('call-accept').addEventListener('click', acceptIncomingCall);
+  document.getElementById('call-decline').addEventListener('click', ()=>endCurrentCall());
+  document.getElementById('call-end').addEventListener('click', ()=>endCurrentCall());
+  document.getElementById('call-mute').addEventListener('click', event=>{
+    const tracks = localCallStream?.getAudioTracks() || [];
+    const enabled = tracks.some(track=>track.enabled);
+    tracks.forEach(track=>{track.enabled = !enabled;});
+    event.currentTarget.setAttribute('aria-pressed', String(enabled));
+    event.currentTarget.textContent = enabled ? 'Unmute mic' : 'Mute mic';
+  });
+  document.getElementById('call-camera').addEventListener('click', event=>{
+    const tracks = localCallStream?.getVideoTracks() || [];
+    const enabled = tracks.some(track=>track.enabled);
+    tracks.forEach(track=>{track.enabled = !enabled;});
+    event.currentTarget.setAttribute('aria-pressed', String(enabled));
+    event.currentTarget.textContent = enabled ? 'Turn camera on' : 'Turn camera off';
+  });
+  document.getElementById('call-dialog').addEventListener('cancel', event=>{
+    event.preventDefault();
+    endCurrentCall();
+  });
+
   // ---------- Shared REST + WebSocket connection ----------
   function connectChat(){
     if(!signedInPerson) return;
     const note = document.getElementById('sync-note');
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     chatSocket = new WebSocket(`${protocol}//${location.host}/ws/chat`);
-    chatSocket.addEventListener('open', ()=>{ note.textContent = 'connected ✦ the dramatic voice is live'; });
+    const socketGeneration = ++chatSocketGeneration;
+    chatSocket.addEventListener('open', ()=>{
+      if(socketGeneration !== chatSocketGeneration) return;
+      note.textContent = 'connected ✦ the dramatic voice is live';
+      updateCallAvailability();
+      pendingChatMessages.forEach(job=>{
+        if(job.uploadDone && job.message.uploadState === 'queued') sendPendingChatMessage(job);
+      });
+    });
     chatSocket.addEventListener('message', event=>{
       const payload = JSON.parse(event.data);
+      if(payload.type === 'call_signal') handleCallSignal(payload);
+      if(payload.type === 'call_error'){
+        setCallAvailability(payload.message || 'Call signaling failed.');
+        if(activeCall){ activeCall.status = payload.message || 'Call signaling failed.'; updateCallDialog(); }
+      }
       if(payload.type === 'history') renderMessages(payload.messages || []);
-      if(payload.type === 'message') renderMessages([...lastMessages, payload.message]);
+      if(payload.type === 'message'){
+        const duplicate = payload.message.client_id && lastMessages.some(message=>String(message.client_id) === String(payload.message.client_id));
+        if(!duplicate) renderMessages([...lastMessages, payload.message]);
+      }
       if(payload.type === 'message_updated') renderMessages(lastMessages.map(message=>message.id === payload.message.id ? payload.message : message));
       if(payload.type === 'message_hidden' && payload.person === signedInPerson){
         lastMessages = lastMessages.filter(message=>String(message.id) !== String(payload.message_id));
@@ -1320,6 +2222,8 @@
     chatSocket.addEventListener('close', event=>{
       if(event.code === 4401){ leaveApp(); return; }
       if(!signedInPerson) return;
+      if(activeCall) finishCall('Chat connection lost. The call ended.');
+      updateCallAvailability();
       note.textContent = 'chat wandered off; trying to bring it back…';
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connectChat, 2500);

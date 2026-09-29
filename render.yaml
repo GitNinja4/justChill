@@ -12,10 +12,6 @@ services:
         fromDatabase:
           name: aditya-and-tishu-db
           property: connectionString
-      - key: ADITYA_WHATSAPP_NUMBER
-        sync: false
-      - key: TISHU_WHATSAPP_NUMBER
-        sync: false
       - key: CORS_ORIGINS
         value: https://aditya-and-tishu.onrender.com
 
