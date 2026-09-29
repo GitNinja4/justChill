@@ -269,6 +269,7 @@
   .location-credit-heading{display:flex; align-items:center; justify-content:space-between; gap:12px;}
   .location-credit-heading h2{margin:0; color:var(--cream); font:400 21px 'Fraunces',serif;}
   .location-credit-copy{color:var(--dim); font-size:13px; line-height:1.6; margin:14px 0 10px;}
+  .location-credit-links{display:grid; justify-items:start; gap:7px; margin-top:12px;}
   .location-credit-link{color:var(--gold); font-size:12px;}
   .profile-location-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
   .profile-location-actions button{border:1px solid rgba(255,255,255,.16); border-radius:8px; padding:9px 11px; background:rgba(255,255,255,.07); color:var(--cream); font:600 11px 'Inter',sans-serif; cursor:pointer;}
@@ -527,7 +528,7 @@
     <section class="profile-location" aria-labelledby="profile-location-title">
       <h3 id="profile-location-title">City & local time <span aria-hidden="true">(</span><button class="profile-location-credit" id="location-credit-open" type="button" aria-label="Credit for city lookup">credit</button><span aria-hidden="true">)</span></h3>
       <p class="profile-location-current" id="profile-location-current"></p>
-      <p class="profile-location-note">Your browser shares an approximate point with OpenStreetMap for this lookup. Only the city and time zone are saved.</p>
+      <p class="profile-location-note">Your approximate point may be sent to Geoapify or OpenStreetMap for lookup. Only the city and time zone are saved.</p>
       <div class="profile-location-actions">
         <button id="location-update" type="button">Update my city</button>
         <button id="location-clear" type="button">Use default city</button>
@@ -558,8 +559,11 @@
       <h2 id="location-credit-title">A little map credit</h2>
       <button class="letter-close" id="location-credit-close" type="button" aria-label="Close attribution">×</button>
     </div>
-    <p class="location-credit-copy">Thanks to OpenStreetMap for helping us find the city name.</p>
-    <a class="location-credit-link" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors and copyright</a>
+    <p class="location-credit-copy">Thanks to Geoapify and OpenStreetMap for helping us find the city name.</p>
+    <div class="location-credit-links">
+      <a class="location-credit-link" href="https://www.geoapify.com/" target="_blank" rel="noopener">Geoapify geocoding</a>
+      <a class="location-credit-link" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>
+    </div>
   </div>
 </dialog>
 

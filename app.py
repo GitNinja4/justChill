@@ -173,6 +173,11 @@ def initialize_db():
                 data {'BYTEA' if DATABASE_URL else 'BLOB'} NOT NULL,
                 created_at TEXT NOT NULL
             )""",
+            """CREATE TABLE IF NOT EXISTS attachment_access (
+                attachment_id TEXT NOT NULL,
+                person TEXT NOT NULL,
+                PRIMARY KEY (attachment_id, person)
+            )""",
             """CREATE TABLE IF NOT EXISTS call_history (
                 call_id TEXT PRIMARY KEY,
                 caller_id TEXT NOT NULL,
@@ -505,7 +510,50 @@ async def get_call_config(request: Request):
     return {"ice_servers": ice_servers}
 
 
-def reverse_geocode_city(latitude: float, longitude: float):
+def city_from_address(address: dict):
+    city = next((address.get(field) for field in (
+        "village", "town", "hamlet", "locality", "suburb", "municipality", "city", "district", "county", "name"
+    ) if isinstance(address.get(field), str) and address[field].strip()), None)
+    if not city:
+        raise HTTPException(status_code=422, detail="A city name could not be found for this location.")
+    return city.strip()[:80]
+
+
+def reverse_geocode_geoapify(latitude: float, longitude: float, api_key: str):
+    query = urlencode({
+        "format": "geojson",
+        "lat": latitude,
+        "lon": longitude,
+        "limit": 1,
+        "lang": "en",
+        "apiKey": api_key,
+    })
+    geocode_request = urllib.request.Request(
+        f"https://api.geoapify.com/v1/geocode/reverse?{query}",
+        headers={
+            "User-Agent": "AdityaAndTishu/1.0 (https://aditya-and-tishu.onrender.com)",
+            "Accept": "application/geo+json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(geocode_request, timeout=8) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            raise HTTPException(status_code=503, detail="Geoapify city lookup is busy.") from error
+        if error.code in {401, 403}:
+            raise HTTPException(status_code=503, detail="Geoapify credentials are unavailable.") from error
+        raise HTTPException(status_code=503, detail="Geoapify city lookup is unavailable.") from error
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        raise HTTPException(status_code=503, detail="Geoapify city lookup is unavailable.") from error
+    features = result.get("features") if isinstance(result, dict) else None
+    properties = features[0].get("properties") if isinstance(features, list) and features and isinstance(features[0], dict) else None
+    if not isinstance(properties, dict):
+        raise HTTPException(status_code=422, detail="A city name could not be found for this location.")
+    return city_from_address(properties)
+
+
+def reverse_geocode_nominatim(latitude: float, longitude: float):
     query = urlencode({
         "format": "jsonv2",
         "addressdetails": 1,
@@ -525,19 +573,31 @@ def reverse_geocode_city(latitude: float, longitude: float):
             result = json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 429:
-            raise HTTPException(status_code=503, detail="City lookup is busy. Please try again in a moment.") from error
-        raise HTTPException(status_code=503, detail="City lookup is temporarily unavailable.") from error
+            raise HTTPException(status_code=503, detail="OpenStreetMap city lookup is busy.") from error
+        raise HTTPException(status_code=503, detail="OpenStreetMap city lookup is unavailable.") from error
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
-        raise HTTPException(status_code=503, detail="City lookup is temporarily unavailable.") from error
+        raise HTTPException(status_code=503, detail="OpenStreetMap city lookup is unavailable.") from error
     address = result.get("address") if isinstance(result, dict) else None
     if not isinstance(address, dict):
         raise HTTPException(status_code=422, detail="A city name could not be found for this location.")
-    city = next((address.get(field) for field in (
-        "city", "town", "village", "municipality", "suburb", "hamlet", "locality", "county"
-    ) if isinstance(address.get(field), str) and address[field].strip()), None)
-    if not city:
-        raise HTTPException(status_code=422, detail="A city name could not be found for this location.")
-    return city.strip()[:80]
+    return city_from_address(address)
+
+
+def reverse_geocode_city(latitude: float, longitude: float):
+    api_key = os.getenv("GEOAPIFY_API_KEY", "").strip()
+    lookup_errors = []
+    if api_key:
+        try:
+            return reverse_geocode_geoapify(latitude, longitude, api_key)
+        except HTTPException as error:
+            lookup_errors.append(error)
+    try:
+        return reverse_geocode_nominatim(latitude, longitude)
+    except HTTPException as error:
+        lookup_errors.append(error)
+    if len(lookup_errors) == 1:
+        raise lookup_errors[0]
+    raise HTTPException(status_code=503, detail="Both city lookup services are busy or unavailable. Please try again.")
 
 
 async def lookup_approximate_city(latitude: float, longitude: float):
@@ -793,6 +853,12 @@ async def open_postcard(postcard_id: int, request: Request):
             "newly_opened": newly_opened,
             "status": "opened",
         }
+        for attachment_id in message_attachment_ids(row["attachments"]):
+            connection.execute(
+                "INSERT INTO attachment_access (attachment_id, person) VALUES (?, ?) "
+                "ON CONFLICT (attachment_id, person) DO NOTHING",
+                (attachment_id, person),
+            )
         connection.execute("DELETE FROM postcards WHERE id = ?", (postcard_id,))
     await broadcast({"type": "postcard_removed", "id": postcard_id})
     return postcard
@@ -955,8 +1021,42 @@ def cleanup_unreferenced_attachments(connection, attachment_ids: list[str]):
             candidates.difference_update(message_attachment_ids(row["attachments"]))
             if not candidates:
                 return
+    for attachment_id in tuple(candidates):
+        grant = connection.execute(
+            "SELECT 1 FROM attachment_access WHERE attachment_id = ? LIMIT 1",
+            (attachment_id,),
+        ).fetchone()
+        if grant:
+            candidates.discard(attachment_id)
     for attachment_id in candidates:
+        connection.execute("DELETE FROM attachment_access WHERE attachment_id = ?", (attachment_id,))
         connection.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
+
+
+def attachment_is_accessible(connection, attachment_id: str, person: str, uploaded_by: str):
+    message_rows = connection.execute(
+        "SELECT messages.attachments, hidden_messages.message_id AS hidden_message_id "
+        "FROM messages LEFT JOIN hidden_messages "
+        "ON hidden_messages.message_id = messages.id AND hidden_messages.person = ? "
+        "WHERE messages.deleted_at IS NULL AND messages.attachments != '[]'",
+        (person,),
+    ).fetchall()
+    has_message_reference = False
+    for row in message_rows:
+        if attachment_id not in message_attachment_ids(row["attachments"]):
+            continue
+        has_message_reference = True
+        if row["hidden_message_id"] is None:
+            return True
+    grant = connection.execute(
+        "SELECT 1 FROM attachment_access WHERE attachment_id = ? AND person = ?",
+        (attachment_id, person),
+    ).fetchone()
+    if grant:
+        return True
+    if has_message_reference:
+        return False
+    return uploaded_by == person
 
 
 @app.delete("/api/messages/{message_id}/hide")
@@ -1035,11 +1135,13 @@ async def upload_attachment(request: Request, file: UploadFile = File(...), uplo
 
 @app.get("/api/attachments/{attachment_id}")
 async def get_attachment(attachment_id: str, request: Request):
-    authenticated_person(request)
+    person = authenticated_person(request)
     with database() as connection:
         row = connection.execute(
-            "SELECT filename, content_type, data FROM attachments WHERE id = ?", (attachment_id,)
+            "SELECT uploaded_by, filename, content_type, data FROM attachments WHERE id = ?", (attachment_id,)
         ).fetchone()
+        if not row or not attachment_is_accessible(connection, attachment_id, person, row["uploaded_by"]):
+            raise HTTPException(status_code=404, detail="That attachment is no longer available.")
     if not row:
         raise HTTPException(status_code=404, detail="That attachment is no longer available.")
     disposition = "inline" if row["content_type"].startswith("image/") else "attachment"
@@ -1114,7 +1216,11 @@ async def set_reaction(message_id: int, payload: dict, request: Request):
         message = connection.execute(
             "SELECT id, deleted_at FROM messages WHERE id = ?", (message_id,)
         ).fetchone()
-        if not message or message["deleted_at"]:
+        hidden_message = connection.execute(
+            "SELECT 1 FROM hidden_messages WHERE message_id = ? AND person = ?",
+            (message_id, person),
+        ).fetchone()
+        if not message or message["deleted_at"] or hidden_message:
             raise HTTPException(status_code=404, detail="That message is unavailable.")
         now = datetime.now(timezone.utc).isoformat()
         if emoji:

@@ -1,4 +1,4 @@
-# Aditya & Tishu
+# Aditya
 
 A private-feeling, single-page long-distance space served by FastAPI. It has live Delhi/Sydney clocks, a database-backed WebSocket chat, sentence-based sign-in for Aditya and Tishu, persistent reactions, authorized message deletion, and in-app WebRTC audio/video calls. Local development uses SQLite by default; Render uses PostgreSQL.
 
@@ -36,7 +36,9 @@ Use **Call history** beside the audio/video call buttons to open the scrollable 
 
 ## Profile locations
 
-Open **My little corner** and choose **Update my city** to grant the browser one-time location access. The browser rounds coordinates to three decimal places; the app sends that approximate point to OpenStreetMap Nominatim to resolve a locality and stores only the returned city name and the browser's IANA time zone. Coordinates are not stored, location is not requested on sign-in, and there is no background tracking. Choose **Use default city** to clear the saved locality. Location access requires HTTPS in production (localhost is allowed for development); the profile UI links to OpenStreetMap attribution.
+Open **My little corner** and choose **Update my city** to grant the browser one-time location access. The browser rounds coordinates to three decimal places; the app tries Geoapify first when configured, then falls back to OpenStreetMap Nominatim if the first lookup fails. Either provider may receive the approximate point. The app stores only the returned city name and the browser's IANA time zone; coordinates are not stored. Location is not requested on sign-in, and there is no background tracking. Choose **Use default city** to clear the saved locality. Location access requires HTTPS in production (localhost is allowed for development).
+
+Set `GEOAPIFY_API_KEY` in the Render service environment to use Geoapify as the primary provider. Create a project and API key at [Geoapify MyProjects](https://myprojects.geoapify.com/), then add the key as a secret environment variable; it is never sent to the browser. Local development can use the same variable. If it is absent or Geoapify is unavailable, the app falls back to OpenStreetMap Nominatim. The profile credit popup links to Geoapify and OpenStreetMap contributors, as required for Geoapify's free plan.
 
 ### Database and storage
 
