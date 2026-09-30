@@ -625,6 +625,7 @@
   let chatSocketGeneration = 0;
   let callIceServers = [{urls:'stun:stun.l.google.com:19302'}];
   let callHasTurn = false;
+  let callConfigurationPromise = null;
   let activeCall = null;
   let callPeerConnection = null;
   let localCallStream = null;
@@ -2140,16 +2141,21 @@
   }
 
   async function loadCallConfiguration(){
-    try{
-      const response = await fetch('/api/call-config', {cache:'no-store'});
-      if(!response.ok) throw new Error('Call settings are unavailable.');
-      const configuration = await response.json();
-      if(Array.isArray(configuration.ice_servers) && configuration.ice_servers.length){
-        callIceServers = configuration.ice_servers;
-      }
-      callHasTurn = Boolean(configuration.has_turn);
-    }catch(err){}
-    updateCallAvailability();
+    if(!callConfigurationPromise){
+      callConfigurationPromise = (async()=>{
+        try{
+          const response = await fetch('/api/call-config', {cache:'no-store'});
+          if(!response.ok) throw new Error('Call settings are unavailable.');
+          const configuration = await response.json();
+          if(Array.isArray(configuration.ice_servers) && configuration.ice_servers.length){
+            callIceServers = configuration.ice_servers;
+          }
+          callHasTurn = Boolean(configuration.has_turn);
+        }catch(err){}
+        updateCallAvailability();
+      })();
+    }
+    return callConfigurationPromise;
   }
 
   function formatCallDuration(seconds){
@@ -2407,6 +2413,7 @@
       setCallAvailability('The chat is reconnecting. Try your call again in a moment.');
       return;
     }
+    await loadCallConfiguration();
     const call = {
       id:crypto.randomUUID(),
       peer:signedInPerson === 'aditya' ? 'tishu' : 'aditya',
