@@ -16,7 +16,12 @@ A private-feeling, single-page long-distance space served by FastAPI. It has liv
 5. (Optional) Set `DATABASE_URL` to use PostgreSQL locally; otherwise the app creates `data/relationship.sqlite3`.
 6. Start the app with `python -m uvicorn app:app --reload`.
 7. Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The SQLite database is created at `data/relationship.sqlite3`.
-8. Sign in with `I'm Aditya` or `I'm Tishu`, then open **My little corner** and change the starter sentence to a private phrase of at least 8 characters.
+8. The existing accounts use usernames `aditya` and `tishu`; their starter sign-in phrases are `I'm Aditya` and `I'm Tishu`. Change the starter phrase to a private phrase of at least 8 characters in **My little corner**.
+9. Run the focused checks with `python -m unittest discover -s tests -v`.
+
+## Accounts and connections
+
+New users select **Create account**, choose a unique username, set a display name, and create a private sign-in phrase of at least 8 characters. Usernames can be searched exactly and changed once every seven days in **My little corner**; display names can be changed separately. The other person must accept a connection request before a private conversation, letters, or calls are available. A user can have multiple separate one-to-one conversations. Keep the sign-in phrase private because there is no email-based account recovery yet.
 
 ## Deploy on Render
 
@@ -27,7 +32,7 @@ A private-feeling, single-page long-distance space served by FastAPI. It has liv
 5. In the Render service environment, set `DATABASE_URL` to the external provider's SSL connection string. The free web service alone does not make the complete deployment free; the database provider's limits, backups, and retention policy still apply.
 6. Back up any existing messages from the currently running SQLite deployment before migrating to PostgreSQL. The app does not automatically copy existing SQLite data into the external database.
 7. Apply the Blueprint and wait for the service to deploy. Open the `/health` URL and confirm it returns `{"status":"ok"}`. Open the `onrender.com` URL Render gives you and update `CORS_ORIGINS` in `render.yaml` to that exact URL if Render assigned a different subdomain, then commit and push the change to redeploy.
-8. Open the URL and sign in with `I'm Aditya` or `I'm Tishu`. Each person should open **My little corner** and change their starter sentence to a private phrase of at least 8 characters, then share the URL with each other.
+8. Open the URL and create an account, or sign in to the existing `aditya` / `tishu` account with its current phrase. Existing users should change the starter phrase in **My little corner**. Search for another person's exact username and accept or send a connection request before opening a private conversation.
 
 ## In-app calls
 
@@ -51,7 +56,7 @@ The Render Blueprint provisions only the free web service and expects an externa
 
 The page itself, REST API, and WebSocket are served by the same FastAPI service. No separate frontend hosting or external database is needed. A person's sign-in session authorizes their chat, attachments, and call signaling.
 
-Messages, deletion state, reactions, letters, profiles, sessions, sign-in hashes, the shared welcome sentence, and uploaded attachment bytes are stored in the database. Chat messages accept up to four images or documents (JPEG, PNG, GIF, WebP, PDF, TXT, or DOCX), up to 10 MB each; a letter can include one image. Attachments are served only to signed-in users. New letters appear immediately in both envelope inboxes and remain there until the recipient opens them. On open, the note is removed for both participants and shown to the reader; a WebSocket event updates the other live inbox immediately. Each person's display name can be changed in **My little corner**; message ownership uses a stable account ID, so renaming does not affect deletion permissions. Existing databases are upgraded on startup with sender IDs, profiles, message deletion, reactions, settings, postcard schema, and attachment metadata. Message deletion is a server-authorized soft delete: the original text is cleared and the other connected client receives the deleted state.
+Messages, deletion state, reactions, letters, profiles, sessions, sign-in hashes, the shared welcome sentence, and uploaded attachment bytes are stored in the database. Chat messages accept up to four images or documents (JPEG, PNG, GIF, WebP, PDF, TXT, or DOCX), up to 10 MB each; a letter can include one image. Attachments are served only to signed-in users. A note can be sent immediately or scheduled in the sender's local time. Scheduled notes appear in the recipient's inbox when due. Opening a note is one-time: it disappears from both participants' lists; replying sends a new note and consumes the original, while closing without replying destroys it. Each person's display name can be changed in **My little corner**; message ownership uses a stable account ID, so renaming does not affect deletion permissions. Existing databases are upgraded on startup with sender IDs, profiles, message deletion, reactions, settings, postcard schema, and attachment metadata. Message deletion is a server-authorized soft delete: the original text is cleared and the other connected client receives the deleted state.
 
 The home page uses a small, locally curated set of rotating greetings. Tishu also gets a time-of-day welcome from a curated set. These messages are generated locally by the app; chat content is not sent to an AI service.
 

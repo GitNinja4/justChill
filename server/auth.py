@@ -12,9 +12,7 @@ from server.config import (
     LOGIN_MAX_FAILURES,
     LOGIN_WINDOW_SECONDS,
     PASSWORD_ROUNDS,
-    PEOPLE,
     SESSION_COOKIE,
-    VALID_PEOPLE,
 )
 from server.db import database
 
@@ -109,7 +107,11 @@ def require_owner(request: Request, person: str):
 
 
 def validate_person(person: str):
-    if person not in VALID_PEOPLE:
+    with database() as connection:
+        exists = connection.execute(
+            "SELECT 1 FROM accounts WHERE person = ?", (person,)
+        ).fetchone()
+    if not exists:
         raise HTTPException(status_code=404, detail="That person isn't on this little map.")
 
 
@@ -117,4 +119,9 @@ def profile_name(connection, person: str):
     row = connection.execute(
         "SELECT display_name FROM profiles WHERE person = ?", (person,)
     ).fetchone()
-    return row["display_name"] if row else PEOPLE[person]
+    if row:
+        return row["display_name"]
+    account = connection.execute(
+        "SELECT username FROM accounts WHERE person = ?", (person,)
+    ).fetchone()
+    return account["username"] if account else person

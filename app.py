@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import os
 import secrets
 import time
@@ -10,7 +11,7 @@ import urllib.request
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 from urllib.parse import urlencode
@@ -23,9 +24,11 @@ from pydantic import BaseModel, Field
 from argon2 import PasswordHasher
 from server.realtime import (
     active_call_routes,
-    broadcast,
+    broadcast_to_conversation,
     connected_clients,
     connected_clients_by_person,
+    connected_clients_by_conversation,
+    websocket_conversations,
 )
 from server.db import database
 from server.auth import (
@@ -60,12 +63,13 @@ from server.config import (
     PEOPLE,
     SESSION_COOKIE,
     SESSION_SECONDS,
-    VALID_PEOPLE,
 )
 
 
 geocode_lock = asyncio.Lock()
 last_geocode_request_at = 0.0
+logger = logging.getLogger(__name__)
+scheduled_delivery_wakeup: asyncio.Event | None = None
 
 
 def initialize_db():
@@ -76,10 +80,41 @@ def initialize_db():
             else "INTEGER PRIMARY KEY AUTOINCREMENT"
         )
         statements = (
+            """CREATE TABLE IF NOT EXISTS accounts (
+                person TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                username_changed_at TEXT,
+                created_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS conversation_members (
+                conversation_id TEXT NOT NULL,
+                person TEXT NOT NULL,
+                PRIMARY KEY (conversation_id, person)
+            )""",
+            """CREATE TABLE IF NOT EXISTS connection_requests (
+                id TEXT PRIMARY KEY,
+                requester_id TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS connections (
+                person_a TEXT NOT NULL,
+                person_b TEXT NOT NULL,
+                conversation_id TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (person_a, person_b)
+            )""",
             f"""CREATE TABLE IF NOT EXISTS messages (
                 id {message_id_type},
                 sender TEXT NOT NULL,
                 sender_id TEXT,
+                conversation_id TEXT,
                 client_message_id TEXT,
                 text TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -124,6 +159,10 @@ def initialize_db():
                 id {message_id_type},
                 sender_id TEXT NOT NULL,
                 recipient_id TEXT NOT NULL,
+                conversation_id TEXT,
+                reply_to_id BIGINT,
+                scheduled_at TEXT,
+                delivered_at TEXT,
                 text TEXT NOT NULL,
                 attachments TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
@@ -148,6 +187,7 @@ def initialize_db():
                 call_id TEXT PRIMARY KEY,
                 caller_id TEXT NOT NULL,
                 recipient_id TEXT NOT NULL,
+                conversation_id TEXT,
                 mode TEXT NOT NULL,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -165,10 +205,10 @@ def initialize_db():
             "CREATE INDEX IF NOT EXISTS idx_reactions_message_id ON reactions (message_id)",
             "CREATE INDEX IF NOT EXISTS idx_postcards_recipient_reveal ON postcards (recipient_id, reveal_at)",
             "CREATE INDEX IF NOT EXISTS idx_call_history_created_at ON call_history (created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_connection_requests_recipient ON connection_requests (recipient_id, status, created_at)",
         )
         for statement in statements:
             connection.execute(statement)
-        connection.execute("DELETE FROM postcards WHERE opened_at IS NOT NULL")
         if DATABASE_URL:
             existing_columns = {
                 row["column_name"]
@@ -182,6 +222,18 @@ def initialize_db():
                     "SELECT column_name FROM information_schema.columns WHERE table_name = 'postcards'"
                 ).fetchall()
             }
+            existing_call_columns = {
+                row["column_name"]
+                for row in connection.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = 'call_history'"
+                ).fetchall()
+            }
+            existing_account_columns = {
+                row["column_name"]
+                for row in connection.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = 'accounts'"
+                ).fetchall()
+            }
         else:
             existing_columns = {
                 row["name"]
@@ -191,6 +243,34 @@ def initialize_db():
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(postcards)").fetchall()
             }
+            existing_call_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(call_history)").fetchall()
+            }
+            existing_account_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(accounts)").fetchall()
+            }
+        if "conversation_id" not in existing_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN conversation_id TEXT")
+        if "conversation_id" not in existing_postcard_columns:
+            connection.execute("ALTER TABLE postcards ADD COLUMN conversation_id TEXT")
+        if "reply_to_id" not in existing_postcard_columns:
+            connection.execute("ALTER TABLE postcards ADD COLUMN reply_to_id BIGINT")
+        if "scheduled_at" not in existing_postcard_columns:
+            connection.execute("ALTER TABLE postcards ADD COLUMN scheduled_at TEXT")
+        if "delivered_at" not in existing_postcard_columns:
+            connection.execute("ALTER TABLE postcards ADD COLUMN delivered_at TEXT")
+        if "username_changed_at" not in existing_account_columns:
+            connection.execute("ALTER TABLE accounts ADD COLUMN username_changed_at TEXT")
+        connection.execute(
+            "UPDATE postcards SET delivered_at = created_at "
+            "WHERE scheduled_at IS NULL AND delivered_at IS NULL AND opened_at IS NULL"
+        )
+        if "conversation_id" not in existing_call_columns:
+            connection.execute("ALTER TABLE call_history ADD COLUMN conversation_id TEXT")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages (conversation_id, id)"
+        )
         if "deleted_at" not in existing_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN deleted_at TEXT")
         if "deleted_by" not in existing_columns:
@@ -208,6 +288,11 @@ def initialize_db():
             "ON messages (sender_id, client_message_id) WHERE client_message_id IS NOT NULL"
         )
         for person, name in PEOPLE.items():
+            connection.execute(
+                "INSERT INTO accounts (person, username, created_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (person) DO NOTHING",
+                (person, person, datetime.now(timezone.utc).isoformat()),
+            )
             profile_exists = connection.execute(
                 "SELECT 1 FROM profiles WHERE person = ?", (person,)
             ).fetchone()
@@ -230,6 +315,35 @@ def initialize_db():
                     "INSERT INTO sign_in_phrases (person, salt, phrase_hash) VALUES (?, ?, ?)",
                     (person, salt, phrase_hash),
                 )
+        legacy_conversation_id = "legacy-aditya-tishu"
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            "INSERT INTO conversations (id, created_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING",
+            (legacy_conversation_id, now),
+        )
+        for person in PEOPLE:
+            connection.execute(
+                "INSERT INTO conversation_members (conversation_id, person) VALUES (?, ?) "
+                "ON CONFLICT (conversation_id, person) DO NOTHING",
+                (legacy_conversation_id, person),
+            )
+        connection.execute(
+            "INSERT INTO connections (person_a, person_b, conversation_id, created_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (person_a, person_b) DO NOTHING",
+            ("aditya", "tishu", legacy_conversation_id, now),
+        )
+        connection.execute(
+            "UPDATE messages SET conversation_id = ? WHERE conversation_id IS NULL",
+            (legacy_conversation_id,),
+        )
+        connection.execute(
+            "UPDATE postcards SET conversation_id = ? WHERE conversation_id IS NULL",
+            (legacy_conversation_id,),
+        )
+        connection.execute(
+            "UPDATE call_history SET conversation_id = ? WHERE conversation_id IS NULL",
+            (legacy_conversation_id,),
+        )
         setting_exists = connection.execute(
             "SELECT 1 FROM app_settings WHERE setting_key = ?", ("welcome_sentence",)
         ).fetchone()
@@ -242,8 +356,19 @@ def initialize_db():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global scheduled_delivery_wakeup
     initialize_db()
-    yield
+    scheduled_delivery_wakeup = asyncio.Event()
+    delivery_task = asyncio.create_task(scheduled_postcard_worker(scheduled_delivery_wakeup))
+    try:
+        yield
+    finally:
+        delivery_task.cancel()
+        try:
+            await delivery_task
+        except asyncio.CancelledError:
+            pass
+        scheduled_delivery_wakeup = None
 
 
 app = FastAPI(title="Aditya & Tishu", lifespan=lifespan)
@@ -277,7 +402,22 @@ class ChatMessage(BaseModel):
 
 
 class LoginRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=24, pattern=r"^[a-zA-Z0-9_]+$")
     sentence: str = Field(min_length=1, max_length=200)
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=24, pattern=r"^[a-zA-Z0-9_]+$")
+    display_name: str | None = Field(default=None, max_length=40)
+    sentence: str = Field(min_length=8, max_length=200)
+
+
+class ConnectionRequestPayload(BaseModel):
+    username: str = Field(min_length=3, max_length=24, pattern=r"^[a-zA-Z0-9_]+$")
+
+
+class ConnectionResponsePayload(BaseModel):
+    action: str = Field(pattern=r"^(accept|decline)$")
 
 
 class ChangeSentenceRequest(BaseModel):
@@ -293,6 +433,10 @@ class DisplayNameRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=40)
 
 
+class UsernameRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=24, pattern=r"^[a-zA-Z0-9_]+$")
+
+
 class LocationUpdateRequest(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
@@ -302,6 +446,20 @@ class LocationUpdateRequest(BaseModel):
 class PostcardRequest(BaseModel):
     text: str = Field(default="", max_length=500)
     attachments: list[str] = Field(default_factory=list, max_length=1)
+    reply_to_id: int | None = None
+    scheduled_at: datetime | None = None
+
+
+USERNAME_CHANGE_INTERVAL = timedelta(days=7)
+
+
+def username_change_allowed_at(changed_at: str | None):
+    if not changed_at:
+        return None
+    last_changed = datetime.fromisoformat(changed_at.replace("Z", "+00:00"))
+    if last_changed.tzinfo is None:
+        last_changed = last_changed.replace(tzinfo=timezone.utc)
+    return (last_changed + USERNAME_CHANGE_INTERVAL).astimezone(timezone.utc)
 
 
 def attachment_metadata(connection, attachment_ids: list[str], person: str, limit: int):
@@ -362,7 +520,7 @@ def serialize_message(row, connection):
         "id": row["id"],
         "person": sender_id,
         "client_id": row["client_message_id"],
-        "from": profile_name(connection, sender_id) if sender_id in PEOPLE else row["sender"],
+        "from": profile_name(connection, sender_id) if sender_id else row["sender"],
         "text": "This message was deleted." if row["deleted_at"] else row["text"],
         "deleted": bool(row["deleted_at"]),
         "ts": int(created_at.timestamp() * 1000),
@@ -388,6 +546,110 @@ def message_with_reactions(connection, message_id):
         for reaction in reactions
     ]
     return message
+
+
+def require_conversation_member(connection, conversation_id: str, person: str):
+    membership = connection.execute(
+        "SELECT 1 FROM conversation_members WHERE conversation_id = ? AND person = ?",
+        (conversation_id, person),
+    ).fetchone()
+    if not membership:
+        raise HTTPException(status_code=404, detail="That conversation is unavailable.")
+
+
+async def broadcast_to_person_conversations(person: str, message: dict):
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT conversation_id FROM conversation_members WHERE person = ?", (person,)
+        ).fetchall()
+    for row in rows:
+        await broadcast_to_conversation(row["conversation_id"], message)
+
+
+async def deliver_due_scheduled_postcards(now: datetime | None = None):
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    delivered_at = current_time.isoformat(timespec="microseconds")
+    due_conversations = []
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT id, conversation_id, recipient_id, scheduled_at FROM postcards "
+            "WHERE scheduled_at IS NOT NULL AND delivered_at IS NULL "
+            "ORDER BY scheduled_at LIMIT 100",
+        ).fetchall()
+        for row in rows:
+            scheduled_at = datetime.fromisoformat(row["scheduled_at"].replace("Z", "+00:00"))
+            if scheduled_at.astimezone(timezone.utc) > current_time:
+                continue
+            cursor = connection.execute(
+                "UPDATE postcards SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL",
+                (delivered_at, row["id"]),
+            )
+            if cursor.rowcount:
+                due_conversations.append((row["conversation_id"], row["id"], row["recipient_id"]))
+    for conversation_id, postcard_id, recipient_id in due_conversations:
+        await broadcast_to_conversation(
+            conversation_id,
+            {
+                "type": "postcard_created",
+                "id": postcard_id,
+                "recipient": recipient_id,
+                "scheduled": True,
+                "delivered": True,
+            },
+        )
+
+
+def seconds_until_next_scheduled_postcard():
+    with database() as connection:
+        row = connection.execute(
+            "SELECT scheduled_at FROM postcards WHERE scheduled_at IS NOT NULL AND delivered_at IS NULL "
+            "ORDER BY scheduled_at LIMIT 1"
+        ).fetchone()
+    if not row:
+        return 60.0
+    scheduled_at = datetime.fromisoformat(row["scheduled_at"].replace("Z", "+00:00"))
+    return max(0.0, (scheduled_at.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds())
+
+
+async def scheduled_postcard_worker(wakeup: asyncio.Event):
+    while True:
+        wakeup.clear()
+        try:
+            await deliver_due_scheduled_postcards()
+            wait_seconds = seconds_until_next_scheduled_postcard()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Scheduled postcard delivery failed")
+            wait_seconds = 1.0
+        try:
+            await asyncio.wait_for(wakeup.wait(), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            pass
+
+
+def select_conversation(connection, person: str, requested_id: str | None = None):
+    if requested_id:
+        require_conversation_member(connection, requested_id, person)
+        return requested_id
+    row = connection.execute(
+        "SELECT conversation_id FROM conversation_members WHERE person = ? "
+        "ORDER BY CASE WHEN conversation_id = 'legacy-aditya-tishu' THEN 0 ELSE 1 END, conversation_id LIMIT 1",
+        (person,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Connect with someone to start a conversation.")
+    return row["conversation_id"]
+
+
+def require_message_access(connection, message_id: int, person: str):
+    row = connection.execute(
+        "SELECT conversation_id FROM messages WHERE id = ?", (message_id,)
+    ).fetchone()
+    if not row or not row["conversation_id"]:
+        raise HTTPException(status_code=404, detail="That message is unavailable.")
+    require_conversation_member(connection, row["conversation_id"], person)
+    return row["conversation_id"]
 
 
 @app.get("/")
@@ -523,18 +785,27 @@ async def lookup_approximate_city(latitude: float, longitude: float):
 
 @app.get("/api/locations")
 async def get_profile_locations(request: Request):
-    authenticated_person(request)
-    locations = {person: dict(location) for person, location in DEFAULT_LOCATIONS.items()}
+    person = authenticated_person(request)
     with database() as connection:
-        rows = connection.execute(
-            "SELECT person, city, time_zone, updated_at FROM profile_locations"
+        member_rows = connection.execute(
+            "SELECT DISTINCT person FROM conversation_members WHERE conversation_id IN "
+            "(SELECT conversation_id FROM conversation_members WHERE person = ?)",
+            (person,),
         ).fetchall()
-    for row in rows:
-        locations[row["person"]] = {
-            "city": row["city"],
-            "time_zone": row["time_zone"],
-            "updated_at": row["updated_at"],
-        }
+        members = {person, *(row["person"] for row in member_rows)}
+        locations = {member: dict(DEFAULT_LOCATIONS[member]) for member in members if member in DEFAULT_LOCATIONS}
+        member_ids = sorted(members)
+        placeholders = ", ".join("?" for _ in member_ids)
+        rows = connection.execute(
+            f"SELECT person, city, time_zone, updated_at FROM profile_locations WHERE person IN ({placeholders})",
+            tuple(member_ids),
+        ).fetchall()
+        for row in rows:
+            locations[row["person"]] = {
+                "city": row["city"],
+                "time_zone": row["time_zone"],
+                "updated_at": row["updated_at"],
+            }
     return {"locations": locations}
 
 
@@ -554,7 +825,9 @@ async def update_profile_location(payload: LocationUpdateRequest, request: Reque
             (person, city, payload.time_zone, updated_at),
         )
     location = {"city": city, "time_zone": payload.time_zone, "updated_at": updated_at}
-    await broadcast({"type": "location_updated", "person": person, "location": location})
+    await broadcast_to_person_conversations(
+        person, {"type": "location_updated", "person": person, "location": location}
+    )
     return {"person": person, "location": location}
 
 
@@ -563,20 +836,23 @@ async def clear_profile_location(request: Request):
     person = authenticated_person(request)
     with database() as connection:
         connection.execute("DELETE FROM profile_locations WHERE person = ?", (person,))
-    location = dict(DEFAULT_LOCATIONS[person])
-    await broadcast({"type": "location_updated", "person": person, "location": location})
+    location = dict(DEFAULT_LOCATIONS.get(person, {"city": "Not set", "time_zone": "UTC"}))
+    await broadcast_to_person_conversations(
+        person, {"type": "location_updated", "person": person, "location": location}
+    )
     return {"person": person, "location": location}
 
 
 @app.get("/api/calls")
-async def get_call_history(request: Request):
+async def get_call_history(request: Request, conversation_id: str | None = None):
     person = authenticated_person(request)
     with database() as connection:
+        conversation_id = select_conversation(connection, person, conversation_id)
         rows = connection.execute(
             "SELECT call_id, caller_id, recipient_id, mode, status, created_at, connected_at, ended_at, duration_seconds "
-            "FROM call_history WHERE caller_id = ? OR recipient_id = ? "
+            "FROM call_history WHERE conversation_id = ? "
             "ORDER BY created_at DESC LIMIT 50",
-            (person, person),
+            (conversation_id,),
         ).fetchall()
         calls = [{
             "call_id": row["call_id"],
@@ -594,13 +870,13 @@ async def get_call_history(request: Request):
     return calls
 
 
-def create_call_history(call_id: str, caller_id: str, recipient_id: str, mode: str):
+def create_call_history(call_id: str, caller_id: str, recipient_id: str, mode: str, conversation_id: str):
     created_at = datetime.now(timezone.utc).isoformat()
     with database() as connection:
         connection.execute(
-            "INSERT INTO call_history (call_id, caller_id, recipient_id, mode, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (call_id) DO NOTHING",
-            (call_id, caller_id, recipient_id, mode, "ringing", created_at),
+            "INSERT INTO call_history (call_id, caller_id, recipient_id, conversation_id, mode, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (call_id) DO NOTHING",
+            (call_id, caller_id, recipient_id, conversation_id, mode, "ringing", created_at),
         )
 
 
@@ -646,16 +922,34 @@ async def get_auth_session(request: Request):
     person = authenticated_person(request)
     with database() as connection:
         name = profile_name(connection, person)
-    return {"person": person, "name": name}
+        row = connection.execute(
+            "SELECT username, username_changed_at FROM accounts WHERE person = ?", (person,)
+        ).fetchone()
+    return {
+        "person": person,
+        "username": row["username"] if row else person,
+        "username_change_allowed_at": username_change_allowed_at(row["username_changed_at"]) if row else None,
+        "name": name,
+    }
 
 
 @app.get("/api/profile/display-names")
 async def get_display_names(request: Request):
-    authenticated_person(request)
+    person = authenticated_person(request)
     with database() as connection:
+        members = connection.execute(
+            "SELECT DISTINCT person FROM conversation_members WHERE conversation_id IN "
+            "(SELECT conversation_id FROM conversation_members WHERE person = ?)",
+            (person,),
+        ).fetchall()
+        member_ids = sorted({person, *(row["person"] for row in members)})
+        placeholders = ", ".join("?" for _ in member_ids)
         names = {
             row["person"]: row["display_name"]
-            for row in connection.execute("SELECT person, display_name FROM profiles").fetchall()
+            for row in connection.execute(
+                f"SELECT person, display_name FROM profiles WHERE person IN ({placeholders})",
+                tuple(member_ids),
+            ).fetchall()
         }
     return {"display_names": names}
 
@@ -668,76 +962,187 @@ async def update_display_name(payload: DisplayNameRequest, request: Request):
         raise HTTPException(status_code=400, detail="Enter a name before saving.")
     now = datetime.now(timezone.utc).isoformat()
     with database() as connection:
-        other = connection.execute(
-            "SELECT person FROM profiles WHERE lower(display_name) = lower(?) AND person != ?",
-            (display_name, person),
-        ).fetchone()
-        if other:
-            raise HTTPException(status_code=409, detail="That display name is already in use.")
         connection.execute(
             "UPDATE profiles SET display_name = ?, updated_at = ? WHERE person = ?",
             (display_name, now, person),
         )
-    await broadcast({"type": "profile_updated", "person": person, "name": display_name})
+    await broadcast_to_person_conversations(
+        person, {"type": "profile_updated", "person": person, "name": display_name}
+    )
     return {"ok": True, "person": person, "name": display_name}
 
 
+@app.put("/api/profile/username")
+async def update_username(payload: UsernameRequest, request: Request):
+    person = authenticated_person(request)
+    username = payload.username.strip().casefold()
+    now = datetime.now(timezone.utc)
+    with database() as connection:
+        account = connection.execute(
+            "SELECT username, username_changed_at FROM accounts WHERE person = ?" +
+            (" FOR UPDATE" if DATABASE_URL else ""),
+            (person,),
+        ).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="That account is unavailable.")
+        allowed_at = username_change_allowed_at(account["username_changed_at"])
+        if username == account["username"]:
+            return {
+                "ok": True,
+                "username": username,
+                "username_change_allowed_at": allowed_at,
+                "unchanged": True,
+            }
+        duplicate = connection.execute(
+            "SELECT 1 FROM accounts WHERE username = ? AND person != ?", (username, person)
+        ).fetchone()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="That username is already taken.")
+        if allowed_at and now < allowed_at:
+            retry_after = max(1, int((allowed_at - now).total_seconds()) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail=f"You can change your username again on {allowed_at.astimezone().strftime('%b %d, %Y at %I:%M %p %Z')}.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        changed_at = now.isoformat()
+        connection.execute(
+            "UPDATE accounts SET username = ?, username_changed_at = ? WHERE person = ?",
+            (username, changed_at, person),
+        )
+        allowed_at = username_change_allowed_at(changed_at)
+    await broadcast_to_person_conversations(
+        person, {"type": "username_updated", "person": person, "username": username}
+    )
+    return {
+        "ok": True,
+        "username": username,
+        "username_change_allowed_at": allowed_at,
+        "unchanged": False,
+    }
+
+
 @app.get("/api/postcards")
-async def get_postcards(request: Request):
+async def get_postcards(request: Request, conversation_id: str | None = None):
     person = authenticated_person(request)
     with database() as connection:
+        conversation_id = select_conversation(connection, person, conversation_id)
         rows = connection.execute(
-            "SELECT id, sender_id, recipient_id, text, attachments, created_at, reveal_at, opened_at "
-            "FROM postcards WHERE (sender_id = ? OR recipient_id = ?) AND opened_at IS NULL "
+            "SELECT id, sender_id, recipient_id, conversation_id, reply_to_id, scheduled_at, delivered_at, "
+            "text, attachments, created_at, reveal_at, opened_at "
+            "FROM postcards WHERE conversation_id = ? AND "
+            "((sender_id = ? AND opened_at IS NULL) OR "
+            "(recipient_id = ? AND opened_at IS NULL AND delivered_at IS NOT NULL)) "
             "ORDER BY created_at DESC, id DESC LIMIT 100",
-            (person, person),
+            (conversation_id, person, person),
         ).fetchall()
         postcards = []
         for row in reversed(rows):
             postcards.append({
                 "id": row["id"],
+                "reply_to_id": row["reply_to_id"],
+                "scheduled_at": row["scheduled_at"],
                 "from": profile_name(connection, row["sender_id"]),
                 "to": profile_name(connection, row["recipient_id"]),
                 "text": row["text"] if row["sender_id"] == person else None,
                 "attachments": json.loads(row["attachments"] or "[]") if row["sender_id"] == person else [],
                 "sent": row["sender_id"] == person,
                 "sent_at": row["created_at"],
-                "status": "unread",
+                "status": (
+                    "scheduled" if row["sender_id"] == person and row["delivered_at"] is None
+                    else "sent" if row["sender_id"] == person
+                    else "unread"
+                ),
             })
     return postcards
 
 
 @app.post("/api/postcards")
-async def create_postcard(payload: PostcardRequest, request: Request):
+async def create_postcard(payload: PostcardRequest, request: Request, conversation_id: str | None = None):
     sender = authenticated_person(request)
-    recipient = "tishu" if sender == "aditya" else "aditya"
     text = payload.text.strip()
     if not text and not payload.attachments:
         raise HTTPException(status_code=400, detail="Write a little note before sending.")
     created_at = datetime.now(timezone.utc)
     sent_at = created_at.isoformat()
+    scheduled_at = payload.scheduled_at
+    if scheduled_at is not None:
+        if scheduled_at.tzinfo is None:
+            raise HTTPException(status_code=422, detail="Scheduled time must include a time zone.")
+        scheduled_at = scheduled_at.astimezone(timezone.utc)
+        if scheduled_at <= created_at:
+            raise HTTPException(status_code=400, detail="Choose a future time for scheduled delivery.")
+        scheduled_at = scheduled_at.isoformat()
+    delivered_at = None if scheduled_at else sent_at
     with database() as connection:
+        conversation_id = select_conversation(connection, sender, conversation_id)
+        members = connection.execute(
+            "SELECT person FROM conversation_members WHERE conversation_id = ? AND person != ?",
+            (conversation_id, sender),
+        ).fetchall()
+        if len(members) != 1:
+            raise HTTPException(status_code=409, detail="Letters need a one-to-one conversation.")
+        recipient = members[0]["person"]
+        if payload.reply_to_id is not None:
+            original = connection.execute(
+                "SELECT sender_id, recipient_id, conversation_id, opened_at, attachments "
+                "FROM postcards WHERE id = ?" + (" FOR UPDATE" if DATABASE_URL else ""),
+                (payload.reply_to_id,),
+            ).fetchone()
+            if (
+                not original
+                or original["conversation_id"] != conversation_id
+                or original["sender_id"] != recipient
+                or original["recipient_id"] != sender
+                or not original["opened_at"]
+            ):
+                raise HTTPException(status_code=404, detail="That note cannot be replied to from this conversation.")
         attachments = attachment_metadata(connection, payload.attachments, sender, 1)
         if any(not item["content_type"].startswith("image/") for item in attachments):
             raise HTTPException(status_code=400, detail="Letters can include one image.")
         insert_query = (
-            "INSERT INTO postcards (sender_id, recipient_id, text, attachments, created_at, reveal_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO postcards (sender_id, recipient_id, conversation_id, reply_to_id, scheduled_at, "
+            "delivered_at, text, attachments, created_at, reveal_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         if DATABASE_URL:
             insert_query += " RETURNING id"
         cursor = connection.execute(
             insert_query,
-            (sender, recipient, text, json.dumps(attachments), sent_at, sent_at),
+            (
+                sender, recipient, conversation_id, payload.reply_to_id, scheduled_at,
+                delivered_at, text, json.dumps(attachments), sent_at, scheduled_at or sent_at,
+            ),
         )
         postcard_id = cursor.fetchone()["id"] if DATABASE_URL else cursor.lastrowid
         recipient_name = profile_name(connection, recipient)
-    await broadcast({"type": "postcard_created", "id": postcard_id, "recipient": recipient})
+        if payload.reply_to_id is not None:
+            original_attachments = message_attachment_ids(original["attachments"])
+            connection.execute("DELETE FROM postcards WHERE id = ?", (payload.reply_to_id,))
+            for attachment_id in original_attachments:
+                connection.execute(
+                    "DELETE FROM attachment_access WHERE attachment_id = ? AND person = ?",
+                    (attachment_id, sender),
+                )
+            cleanup_unreferenced_attachments(connection, original_attachments)
+    if scheduled_at and scheduled_delivery_wakeup:
+        scheduled_delivery_wakeup.set()
+    await broadcast_to_conversation(
+        conversation_id,
+        {
+            "type": "postcard_created",
+            "id": postcard_id,
+            "recipient": recipient,
+            "scheduled": scheduled_at is not None,
+            "delivered": scheduled_at is None,
+        },
+    )
     return {
         "ok": True,
         "id": postcard_id,
         "recipient": recipient,
         "recipient_name": recipient_name,
+        "scheduled_at": scheduled_at,
     }
 
 
@@ -747,21 +1152,23 @@ async def open_postcard(postcard_id: int, request: Request):
     with database() as connection:
         lock_clause = " FOR UPDATE" if DATABASE_URL else ""
         row = connection.execute(
-            "SELECT id, sender_id, recipient_id, text, attachments, created_at, reveal_at, opened_at "
+            "SELECT id, sender_id, recipient_id, conversation_id, reply_to_id, scheduled_at, delivered_at, "
+            "text, attachments, created_at, reveal_at, opened_at "
             f"FROM postcards WHERE id = ?{lock_clause}", (postcard_id,),
         ).fetchone()
-        if not row or row["recipient_id"] != person:
+        if not row or row["recipient_id"] != person or row["opened_at"] or not row["delivered_at"]:
             raise HTTPException(status_code=404, detail="That postcard is not for you.")
-        newly_opened = row["opened_at"] is None
+        require_conversation_member(connection, row["conversation_id"], person)
         postcard = {
             "id": row["id"],
+            "reply_to_id": row["reply_to_id"],
             "from": profile_name(connection, row["sender_id"]),
             "to": profile_name(connection, row["recipient_id"]),
             "text": row["text"],
             "attachments": json.loads(row["attachments"] or "[]"),
             "sent": False,
             "opened": True,
-            "newly_opened": newly_opened,
+            "newly_opened": True,
             "status": "opened",
         }
         for attachment_id in message_attachment_ids(row["attachments"]):
@@ -770,78 +1177,95 @@ async def open_postcard(postcard_id: int, request: Request):
                 "ON CONFLICT (attachment_id, person) DO NOTHING",
                 (attachment_id, person),
             )
-        connection.execute("DELETE FROM postcards WHERE id = ?", (postcard_id,))
-    await broadcast({"type": "postcard_removed", "id": postcard_id})
+        opened_update = connection.execute(
+            "UPDATE postcards SET opened_at = ? WHERE id = ? AND opened_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), postcard_id),
+        )
+        if opened_update.rowcount != 1:
+            raise HTTPException(status_code=404, detail="That postcard has already been opened.")
+    await broadcast_to_conversation(
+        row["conversation_id"], {"type": "postcard_opened", "id": postcard_id, "recipient": person}
+    )
     return postcard
 
 
-@app.get("/api/settings/welcome-sentence")
-async def get_welcome_sentence(request: Request):
-    authenticated_person(request)
+@app.post("/api/postcards/{postcard_id}/dismiss")
+async def dismiss_postcard(postcard_id: int, request: Request):
+    person = authenticated_person(request)
     with database() as connection:
         row = connection.execute(
-            "SELECT setting_value FROM app_settings WHERE setting_key = ?",
-            ("welcome_sentence",),
+            "SELECT sender_id, recipient_id, conversation_id, attachments, opened_at "
+            "FROM postcards WHERE id = ?" + (" FOR UPDATE" if DATABASE_URL else ""),
+            (postcard_id,),
         ).fetchone()
+        if not row or row["recipient_id"] != person or not row["opened_at"]:
+            raise HTTPException(status_code=404, detail="That opened note is no longer available.")
+        require_conversation_member(connection, row["conversation_id"], person)
+        attachment_ids = message_attachment_ids(row["attachments"])
+        connection.execute("DELETE FROM postcards WHERE id = ?", (postcard_id,))
+        for attachment_id in attachment_ids:
+            connection.execute(
+                "DELETE FROM attachment_access WHERE attachment_id = ? AND person = ?",
+                (attachment_id, person),
+            )
+        cleanup_unreferenced_attachments(connection, attachment_ids)
+    await broadcast_to_conversation(
+        row["conversation_id"], {"type": "postcard_destroyed", "id": postcard_id}
+    )
+    return {"ok": True}
+
+
+@app.get("/api/settings/welcome-sentence")
+async def get_welcome_sentence(request: Request, conversation_id: str | None = None):
+    person = authenticated_person(request)
+    with database() as connection:
+        conversation_id = select_conversation(connection, person, conversation_id)
+        row = connection.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+            (f"welcome_sentence:{conversation_id}",),
+        ).fetchone()
+        if not row and conversation_id == "legacy-aditya-tishu":
+            row = connection.execute(
+                "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+                ("welcome_sentence",),
+            ).fetchone()
+    if not row:
+        return {"value": "A little hello from here"}
     return {"value": row["setting_value"]}
 
 
 @app.put("/api/settings/welcome-sentence")
-async def update_welcome_sentence(payload: SettingRequest, request: Request):
+async def update_welcome_sentence(payload: SettingRequest, request: Request, conversation_id: str | None = None):
     person = authenticated_person(request)
     value = payload.value.strip()
     if not value:
         raise HTTPException(status_code=400, detail="The welcome sentence cannot be empty.")
     now = datetime.now(timezone.utc).isoformat()
     with database() as connection:
+        conversation_id = select_conversation(connection, person, conversation_id)
+        setting_key = f"welcome_sentence:{conversation_id}"
         if DATABASE_URL:
             connection.execute(
                 "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
                 "ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = EXCLUDED.updated_at",
-                ("welcome_sentence", value, now),
+                (setting_key, value, now),
             )
         else:
             connection.execute(
                 "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?, ?, ?) "
                 "ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at",
-                ("welcome_sentence", value, now),
+                (setting_key, value, now),
             )
-    await broadcast({"type": "setting_updated", "key": "welcome_sentence", "value": value})
+    await broadcast_to_conversation(
+        conversation_id, {"type": "setting_updated", "key": "welcome_sentence", "value": value}
+    )
     return {"ok": True, "value": value, "updated_by": person}
 
 
-@app.post("/api/auth/login")
-async def login(payload: LoginRequest, request: Request, response: Response):
-    source = login_source(request)
-    await enforce_login_rate_limit(source)
-    phrase = payload.sentence.strip()
-    if not phrase:
-        await record_login_failure(source)
-        raise HTTPException(status_code=401, detail="That sentence didn't sound quite right.")
-    with database() as connection:
-        rows = connection.execute(
-            "SELECT person, salt, phrase_hash FROM sign_in_phrases"
-        ).fetchall()
-    matches = [
-        row["person"]
-        for row in rows
-        if phrase_matches(phrase, row["salt"], row["phrase_hash"])
-    ]
-    if len(matches) != 1:
-        await record_login_failure(source)
-        raise HTTPException(status_code=401, detail="That sentence didn't sound quite right.")
-
-    person = matches[0]
-    matched_row = next(row for row in rows if row["person"] == person)
+def establish_session(person: str, request: Request, response: Response):
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with database() as connection:
-        if needs_hash_upgrade(matched_row["phrase_hash"]):
-            salt, phrase_hash = hash_phrase(phrase)
-            connection.execute(
-                "UPDATE sign_in_phrases SET salt = ?, phrase_hash = ? WHERE person = ?",
-                (salt, phrase_hash, person),
-            )
         connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
         connection.execute(
             "INSERT INTO sessions (token_hash, person, expires_at) VALUES (?, ?, ?)",
@@ -856,10 +1280,226 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         samesite="strict",
         path="/",
     )
+
+
+@app.post("/api/auth/register")
+async def register(payload: RegisterRequest, request: Request, response: Response):
+    source = login_source(request)
+    await enforce_login_rate_limit(source)
+    username = payload.username.strip().casefold()
+    phrase = payload.sentence.strip()
+    if len(phrase) < 8:
+        await record_login_failure(source)
+        raise HTTPException(status_code=400, detail="Use a private sign-in phrase with at least 8 characters.")
+    person = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    display_name = (payload.display_name or "").strip() or username
+    salt, phrase_hash = hash_phrase(phrase)
+    with database() as connection:
+        existing = connection.execute(
+            "SELECT 1 FROM accounts WHERE username = ?", (username,)
+        ).fetchone()
+        if existing:
+            await record_login_failure(source)
+            raise HTTPException(status_code=409, detail="That username is already taken.")
+        connection.execute(
+            "INSERT INTO accounts (person, username, created_at) VALUES (?, ?, ?)",
+            (person, username, now),
+        )
+        connection.execute(
+            "INSERT INTO profiles (person, display_name, updated_at) VALUES (?, ?, ?)",
+            (person, display_name, now),
+        )
+        connection.execute(
+            "INSERT INTO sign_in_phrases (person, salt, phrase_hash) VALUES (?, ?, ?)",
+            (person, salt, phrase_hash),
+        )
+    establish_session(person, request, response)
+    await clear_login_failures(source)
+    return {"person": person, "username": username, "name": display_name}
+
+
+@app.post("/api/auth/login")
+async def login(payload: LoginRequest, request: Request, response: Response):
+    source = login_source(request)
+    await enforce_login_rate_limit(source)
+    username = payload.username.strip().casefold()
+    phrase = payload.sentence.strip()
+    if not username or not phrase:
+        await record_login_failure(source)
+        raise HTTPException(status_code=401, detail="That sentence didn't sound quite right.")
+    with database() as connection:
+        matched_row = connection.execute(
+            "SELECT accounts.person, accounts.username, accounts.username_changed_at, "
+            "sign_in_phrases.salt, sign_in_phrases.phrase_hash "
+            "FROM accounts JOIN sign_in_phrases ON sign_in_phrases.person = accounts.person "
+            "WHERE accounts.username = ?",
+            (username,),
+        ).fetchone()
+    if not matched_row or not phrase_matches(phrase, matched_row["salt"], matched_row["phrase_hash"]):
+        await record_login_failure(source)
+        raise HTTPException(status_code=401, detail="That sentence didn't sound quite right.")
+
+    person = matched_row["person"]
+    with database() as connection:
+        if needs_hash_upgrade(matched_row["phrase_hash"]):
+            salt, phrase_hash = hash_phrase(phrase)
+            connection.execute(
+                "UPDATE sign_in_phrases SET salt = ?, phrase_hash = ? WHERE person = ?",
+                (salt, phrase_hash, person),
+            )
+    establish_session(person, request, response)
     with database() as connection:
         name = profile_name(connection, person)
     await clear_login_failures(source)
-    return {"person": person, "name": name}
+    return {
+        "person": person,
+        "username": matched_row["username"],
+        "username_change_allowed_at": username_change_allowed_at(matched_row["username_changed_at"]),
+        "name": name,
+    }
+
+
+@app.get("/api/users/search")
+async def search_user(username: str, request: Request):
+    person = authenticated_person(request)
+    username = username.strip().casefold()
+    with database() as connection:
+        row = connection.execute(
+            "SELECT accounts.person, accounts.username, profiles.display_name "
+            "FROM accounts JOIN profiles ON profiles.person = accounts.person "
+            "WHERE accounts.username = ? AND accounts.person != ?",
+            (username, person),
+        ).fetchone()
+    if not row:
+        return {"user": None}
+    return {"user": {"username": row["username"], "name": row["display_name"]}}
+
+
+@app.get("/api/connections")
+async def get_connections(request: Request):
+    person = authenticated_person(request)
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT conversation_id, CASE WHEN person_a = ? THEN person_b ELSE person_a END AS partner "
+            "FROM connections WHERE person_a = ? OR person_b = ? ORDER BY created_at DESC",
+            (person, person, person),
+        ).fetchall()
+        connections = []
+        for row in rows:
+            partner = connection.execute(
+                "SELECT accounts.username, profiles.display_name FROM accounts "
+                "JOIN profiles ON profiles.person = accounts.person WHERE accounts.person = ?",
+                (row["partner"],),
+            ).fetchone()
+            if partner:
+                connections.append({
+                    "conversation_id": row["conversation_id"],
+                    "person": row["partner"],
+                    "username": partner["username"],
+                    "name": partner["display_name"],
+                })
+    return connections
+
+
+@app.get("/api/connection-requests")
+async def get_connection_requests(request: Request):
+    person = authenticated_person(request)
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT r.id, r.requester_id, r.recipient_id, r.status, r.created_at, "
+            "a.username, p.display_name FROM connection_requests r "
+            "JOIN accounts a ON a.person = CASE WHEN r.requester_id = ? THEN r.recipient_id ELSE r.requester_id END "
+            "JOIN profiles p ON p.person = a.person "
+            "WHERE r.requester_id = ? OR r.recipient_id = ? ORDER BY r.created_at DESC",
+            (person, person, person),
+        ).fetchall()
+    return [{
+        "id": row["id"],
+        "username": row["username"],
+        "name": row["display_name"],
+        "status": row["status"],
+        "direction": "incoming" if row["recipient_id"] == person else "outgoing",
+        "created_at": row["created_at"],
+    } for row in rows]
+
+
+@app.post("/api/connection-requests")
+async def create_connection_request(payload: ConnectionRequestPayload, request: Request):
+    person = authenticated_person(request)
+    username = payload.username.strip().casefold()
+    now = datetime.now(timezone.utc).isoformat()
+    with database() as connection:
+        target = connection.execute(
+            "SELECT person FROM accounts WHERE username = ?", (username,)
+        ).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="No account uses that username.")
+        recipient = target["person"]
+        if recipient == person:
+            raise HTTPException(status_code=400, detail="You cannot connect with your own account.")
+        person_a, person_b = sorted((person, recipient))
+        existing_connection = connection.execute(
+            "SELECT 1 FROM connections WHERE person_a = ? AND person_b = ?",
+            (person_a, person_b),
+        ).fetchone()
+        if existing_connection:
+            raise HTTPException(status_code=409, detail="You are already connected.")
+        pending = connection.execute(
+            "SELECT 1 FROM connection_requests WHERE status = 'pending' AND "
+            "((requester_id = ? AND recipient_id = ?) OR (requester_id = ? AND recipient_id = ?))",
+            (person, recipient, recipient, person),
+        ).fetchone()
+        if pending:
+            raise HTTPException(status_code=409, detail="A connection request is already pending.")
+        connection.execute(
+            "INSERT INTO connection_requests (id, requester_id, recipient_id, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'pending', ?, ?)",
+            (str(uuid.uuid4()), person, recipient, now, now),
+        )
+    return {"ok": True}
+
+
+@app.post("/api/connection-requests/{request_id}/respond")
+async def respond_to_connection_request(
+    request_id: str, payload: ConnectionResponsePayload, request: Request
+):
+    person = authenticated_person(request)
+    now = datetime.now(timezone.utc).isoformat()
+    with database() as connection:
+        row = connection.execute(
+            "SELECT requester_id, recipient_id, status FROM connection_requests WHERE id = ?",
+            (request_id,),
+        ).fetchone()
+        if not row or row["recipient_id"] != person or row["status"] != "pending":
+            raise HTTPException(status_code=404, detail="That pending request is unavailable.")
+        if payload.action == "decline":
+            connection.execute(
+                "UPDATE connection_requests SET status = 'declined', updated_at = ? WHERE id = ?",
+                (now, request_id),
+            )
+            return {"ok": True, "status": "declined"}
+        requester = row["requester_id"]
+        person_a, person_b = sorted((person, requester))
+        conversation_id = str(uuid.uuid4())
+        connection.execute(
+            "INSERT INTO conversations (id, created_at) VALUES (?, ?)",
+            (conversation_id, now),
+        )
+        for member in (person, requester):
+            connection.execute(
+                "INSERT INTO conversation_members (conversation_id, person) VALUES (?, ?)",
+                (conversation_id, member),
+            )
+        connection.execute(
+            "INSERT INTO connections (person_a, person_b, conversation_id, created_at) VALUES (?, ?, ?, ?)",
+            (person_a, person_b, conversation_id, now),
+        )
+        connection.execute(
+            "UPDATE connection_requests SET status = 'accepted', updated_at = ? WHERE id = ?",
+            (now, request_id),
+        )
+    return {"ok": True, "status": "accepted", "conversation_id": conversation_id}
 
 
 @app.post("/api/auth/logout")
@@ -904,14 +1544,16 @@ async def change_login_sentence(payload: ChangeSentenceRequest, request: Request
 
 
 @app.get("/api/messages")
-async def get_messages(request: Request):
+async def get_messages(request: Request, conversation_id: str | None = None):
     person = authenticated_person(request)
     with database() as connection:
+        conversation_id = select_conversation(connection, person, conversation_id)
         rows = connection.execute(
             "SELECT id, sender FROM messages "
-            "WHERE NOT EXISTS (SELECT 1 FROM hidden_messages WHERE message_id = messages.id AND person = ?) "
+            "WHERE conversation_id = ? AND NOT EXISTS "
+            "(SELECT 1 FROM hidden_messages WHERE message_id = messages.id AND person = ?) "
             "ORDER BY id DESC LIMIT 100",
-            (person,),
+            (conversation_id, person),
         ).fetchall()
         messages = [message_with_reactions(connection, row["id"]) for row in reversed(rows)]
     return messages
@@ -954,8 +1596,10 @@ def attachment_is_accessible(connection, attachment_id: str, person: str, upload
         "SELECT messages.attachments, hidden_messages.message_id AS hidden_message_id "
         "FROM messages LEFT JOIN hidden_messages "
         "ON hidden_messages.message_id = messages.id AND hidden_messages.person = ? "
+        "JOIN conversation_members ON conversation_members.conversation_id = messages.conversation_id "
+        "AND conversation_members.person = ? "
         "WHERE messages.deleted_at IS NULL AND messages.attachments != '[]'",
-        (person,),
+        (person, person),
     ).fetchall()
     has_message_reference = False
     for row in message_rows:
@@ -985,12 +1629,15 @@ async def hide_message(message_id: int, request: Request):
         ).fetchone()
         if not message or message["deleted_at"]:
             raise HTTPException(status_code=404, detail="That message is unavailable.")
+        conversation_id = require_message_access(connection, message_id, person)
         connection.execute(
             "INSERT INTO hidden_messages (message_id, person, hidden_at) VALUES (?, ?, ?) "
             "ON CONFLICT (message_id, person) DO NOTHING",
             (message_id, person, hidden_at),
         )
-    await broadcast({"type": "message_hidden", "message_id": message_id, "person": person})
+    await broadcast_to_conversation(
+        conversation_id, {"type": "message_hidden", "message_id": message_id, "person": person}
+    )
     return {"ok": True}
 
 
@@ -1084,6 +1731,7 @@ async def delete_message(message_id: int, request: Request):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="That message no longer exists.")
+        conversation_id = require_message_access(connection, message_id, person)
         if row["sender_id"] != person:
             raise HTTPException(status_code=403, detail="You can only delete your own messages.")
         attachment_ids = message_attachment_ids(row["attachments"])
@@ -1095,7 +1743,7 @@ async def delete_message(message_id: int, request: Request):
         connection.execute("DELETE FROM reactions WHERE message_id = ?", (message_id,))
         cleanup_unreferenced_attachments(connection, attachment_ids)
         message = message_with_reactions(connection, message_id)
-    await broadcast({"type": "message_updated", "message": message})
+    await broadcast_to_conversation(conversation_id, {"type": "message_updated", "message": message})
     return {"ok": True, "message": message}
 
 
@@ -1110,6 +1758,7 @@ async def permanently_erase_message(message_id: int, request: Request):
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="That message no longer exists.")
+        conversation_id = require_message_access(connection, message_id, person)
         if row["sender_id"] != person:
             raise HTTPException(status_code=403, detail="You can only permanently erase your own messages.")
         attachment_ids = message_attachment_ids(row["attachments"])
@@ -1117,7 +1766,7 @@ async def permanently_erase_message(message_id: int, request: Request):
         connection.execute("DELETE FROM hidden_messages WHERE message_id = ?", (message_id,))
         connection.execute("DELETE FROM messages WHERE id = ?", (message_id,))
         cleanup_unreferenced_attachments(connection, attachment_ids)
-    await broadcast({"type": "message_removed", "message_id": message_id})
+    await broadcast_to_conversation(conversation_id, {"type": "message_removed", "message_id": message_id})
     return {"ok": True, "message_id": message_id}
 
 
@@ -1138,6 +1787,7 @@ async def set_reaction(message_id: int, payload: dict, request: Request):
         ).fetchone()
         if not message or message["deleted_at"] or hidden_message:
             raise HTTPException(status_code=404, detail="That message is unavailable.")
+        conversation_id = require_message_access(connection, message_id, person)
         now = datetime.now(timezone.utc).isoformat()
         if emoji:
             if DATABASE_URL:
@@ -1157,16 +1807,26 @@ async def set_reaction(message_id: int, payload: dict, request: Request):
                 "DELETE FROM reactions WHERE message_id = ? AND person = ?", (message_id, person)
             )
         updated_message = message_with_reactions(connection, message_id)
-    await broadcast({"type": "message_updated", "message": updated_message})
+    await broadcast_to_conversation(
+        conversation_id, {"type": "message_updated", "message": updated_message}
+    )
     return updated_message
 
 
-async def relay_call_signal(websocket: WebSocket, person: str, payload: dict):
+async def relay_call_signal(websocket: WebSocket, person: str, conversation_id: str, payload: dict):
     action = payload.get("action")
     target = payload.get("target")
     call_id = payload.get("call_id")
     data = payload.get("data", {})
-    if not isinstance(action, str) or action not in CALL_SIGNAL_ACTIONS or not isinstance(target, str) or target not in VALID_PEOPLE or target == person:
+    if not isinstance(action, str) or action not in CALL_SIGNAL_ACTIONS or not isinstance(target, str) or target == person:
+        await websocket.send_json({"type": "call_error", "message": "That call request is not valid."})
+        return
+    with database() as connection:
+        target_is_member = connection.execute(
+            "SELECT 1 FROM conversation_members WHERE conversation_id = ? AND person = ?",
+            (conversation_id, target),
+        ).fetchone()
+    if not target_is_member:
         await websocket.send_json({"type": "call_error", "message": "That call request is not valid."})
         return
     try:
@@ -1193,12 +1853,15 @@ async def relay_call_signal(websocket: WebSocket, person: str, payload: dict):
         if call_id in active_call_routes:
             await websocket.send_json({"type": "call_error", "message": "That call is already in progress."})
             return
-        create_call_history(call_id, person, target, data["mode"])
-        await broadcast({"type": "call_history_changed"})
-        recipients = tuple(connected_clients_by_person[target])
+        create_call_history(call_id, person, target, data["mode"], conversation_id)
+        await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
+        recipients = tuple(
+            client for client in connected_clients_by_person[target]
+            if websocket_conversations.get(client) == conversation_id
+        )
         if not recipients:
             update_call_history(call_id, "missed")
-            await broadcast({"type": "call_history_changed"})
+            await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
             await websocket.send_json({"type": "call_signal", "action": "unavailable", "call_id": call_id, "sender": target, "data": {}})
             return
         recipient = recipients[0]
@@ -1215,34 +1878,36 @@ async def relay_call_signal(websocket: WebSocket, person: str, payload: dict):
     except Exception:
         connected_clients.discard(recipient)
         connected_clients_by_person[target].discard(recipient)
+        connected_clients_by_conversation[conversation_id].discard(recipient)
+        websocket_conversations.pop(recipient, None)
         active_call_routes.pop(call_id, None)
         if action == "invite":
             update_call_history(call_id, "missed")
-            await broadcast({"type": "call_history_changed"})
+            await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
             await websocket.send_json({"type": "call_signal", "action": "unavailable", "call_id": call_id, "sender": target, "data": {}})
         return
     if action == "accept":
         update_call_history(call_id, "connecting")
-        await broadcast({"type": "call_history_changed"})
+        await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
     elif action == "connected":
         update_call_history(call_id, "connected")
-        await broadcast({"type": "call_history_changed"})
+        await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
     elif action == "busy":
         update_call_history(call_id, "busy")
-        await broadcast({"type": "call_history_changed"})
+        await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
     elif action == "decline":
         reason = data.get("reason")
         status = "missed" if reason == "no_answer" else "failed" if reason == "media_unavailable" else "declined"
         update_call_history(call_id, status)
-        await broadcast({"type": "call_history_changed"})
+        await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
     elif action == "cancel":
         status = "missed" if data.get("reason") == "no_answer" else "cancelled"
         update_call_history(call_id, status)
-        await broadcast({"type": "call_history_changed"})
+        await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
     elif action == "hangup":
         status = "connection_lost" if data.get("reason") == "connection_lost" else "hangup"
         update_call_history(call_id, status)
-        await broadcast({"type": "call_history_changed"})
+        await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
     if action in {"busy", "decline", "cancel", "hangup"}:
         active_call_routes.pop(call_id, None)
 
@@ -1253,8 +1918,10 @@ async def notify_call_peer_disconnect(websocket: WebSocket, person: str):
             continue
         active_call_routes.pop(call_id, None)
         update_call_history(call_id, "disconnect")
-        await broadcast({"type": "call_history_changed"})
-        peer_person = "tishu" if person == "aditya" else "aditya"
+        conversation_id = websocket_conversations.get(websocket)
+        if conversation_id:
+            await broadcast_to_conversation(conversation_id, {"type": "call_history_changed"})
+        peer_person = next((member for member in route if member != person), None)
         peer = route.get(peer_person)
         if not peer:
             continue
@@ -1269,6 +1936,9 @@ async def notify_call_peer_disconnect(websocket: WebSocket, person: str):
         except Exception:
             connected_clients.discard(peer)
             connected_clients_by_person[peer_person].discard(peer)
+            if conversation_id:
+                connected_clients_by_conversation[conversation_id].discard(peer)
+            websocket_conversations.pop(peer, None)
 
 
 @app.websocket("/ws/chat")
@@ -1278,14 +1948,27 @@ async def chat_socket(websocket: WebSocket):
     if not person:
         await websocket.close(code=4401, reason="Sign in first.")
         return
+    conversation_id = websocket.query_params.get("conversation_id")
+    if not conversation_id:
+        await websocket.close(code=4403, reason="Choose a conversation first.")
+        return
+    try:
+        with database() as connection:
+            require_conversation_member(connection, conversation_id, person)
+    except HTTPException:
+        await websocket.close(code=4403, reason="That conversation is unavailable.")
+        return
     connected_clients.add(websocket)
     connected_clients_by_person[person].add(websocket)
+    connected_clients_by_conversation[conversation_id].add(websocket)
+    websocket_conversations[websocket] = conversation_id
     with database() as connection:
         rows = connection.execute(
             "SELECT id, sender FROM messages "
-            "WHERE NOT EXISTS (SELECT 1 FROM hidden_messages WHERE message_id = messages.id AND person = ?) "
+            "WHERE conversation_id = ? AND NOT EXISTS "
+            "(SELECT 1 FROM hidden_messages WHERE message_id = messages.id AND person = ?) "
             "ORDER BY id DESC LIMIT 100",
-            (person,),
+            (conversation_id, person),
         ).fetchall()
         messages = [message_with_reactions(connection, row["id"]) for row in reversed(rows)]
     await websocket.send_json({"type": "history", "messages": messages})
@@ -1296,7 +1979,7 @@ async def chat_socket(websocket: WebSocket):
                 await websocket.close(code=4401, reason="Your sign-in has changed.")
                 break
             if isinstance(payload, dict) and payload.get("type") == "call_signal":
-                await relay_call_signal(websocket, person, payload)
+                await relay_call_signal(websocket, person, conversation_id, payload)
                 continue
             try:
                 message = ChatMessage.model_validate(payload)
@@ -1322,13 +2005,13 @@ async def chat_socket(websocket: WebSocket):
                     else:
                         if message.client_id:
                             insert_query = (
-                                "INSERT INTO messages (sender, sender_id, client_message_id, text, attachments, created_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+                                "INSERT INTO messages (sender, sender_id, conversation_id, client_message_id, text, attachments, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
                             )
-                            parameters = (sender_name, person, message.client_id, text, json.dumps(attachments), created_at)
+                            parameters = (sender_name, person, conversation_id, message.client_id, text, json.dumps(attachments), created_at)
                         else:
-                            insert_query = "INSERT INTO messages (sender, sender_id, text, attachments, created_at) VALUES (?, ?, ?, ?, ?)"
-                            parameters = (sender_name, person, text, json.dumps(attachments), created_at)
+                            insert_query = "INSERT INTO messages (sender, sender_id, conversation_id, text, attachments, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+                            parameters = (sender_name, person, conversation_id, text, json.dumps(attachments), created_at)
                         if DATABASE_URL:
                             insert_query += " RETURNING id"
                         cursor = connection.execute(insert_query, parameters)
@@ -1346,10 +2029,12 @@ async def chat_socket(websocket: WebSocket):
             except HTTPException as error:
                 await websocket.send_json({"type": "error", "message": error.detail})
                 continue
-            await broadcast({"type": "message", "message": saved_message})
+            await broadcast_to_conversation(conversation_id, {"type": "message", "message": saved_message})
     except WebSocketDisconnect:
         pass
     finally:
         await notify_call_peer_disconnect(websocket, person)
         connected_clients.discard(websocket)
         connected_clients_by_person[person].discard(websocket)
+        connected_clients_by_conversation[conversation_id].discard(websocket)
+        websocket_conversations.pop(websocket, None)
